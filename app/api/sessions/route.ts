@@ -36,3 +36,21 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ session: data });
 }
+
+export async function DELETE(request: Request) {
+  const supabase = createServiceClient();
+
+  const { searchParams } = new URL(request.url);
+  const sessionId = searchParams.get("id");
+  if (!sessionId) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  const { error } = await supabase.from("chat_sessions").delete().eq("id", sessionId);
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
+}

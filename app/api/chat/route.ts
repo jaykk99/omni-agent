@@ -67,7 +67,7 @@ const TERMINAL_TOOL: ToolDefinition = {
 export async function POST(request: Request) {
   const supabase = createServiceClient();
 
-  const { sessionId, message } = await request.json();
+  const { sessionId, message, model } = await request.json();
   if (!sessionId || !message) {
     return NextResponse.json(
       { error: "sessionId and message are required" },
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
   const events: { type: string; detail?: string }[] = [];
 
   for (let i = 0; i < 5; i++) {
-    const completion = await chatCompletion(messages, [BROWSER_TOOL, TERMINAL_TOOL]);
+    const completion = await chatCompletion(messages, [BROWSER_TOOL, TERMINAL_TOOL], model);
     const choice = completion.choices[0];
     const assistantMessage = choice.message;
     messages.push(assistantMessage);

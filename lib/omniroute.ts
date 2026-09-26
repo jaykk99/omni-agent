@@ -37,7 +37,8 @@ export type ToolDefinition = {
 
 export async function chatCompletion(
   messages: ChatMessage[],
-  tools?: ToolDefinition[]
+  tools?: ToolDefinition[],
+  model?: string
 ) {
   if (!API_KEY) {
     throw new Error(
@@ -54,7 +55,7 @@ export async function chatCompletion(
       "X-Title": "Omni Agent",
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: model || MODEL,
       messages,
       tools,
       temperature: 0.4,
