@@ -1,10 +1,8 @@
 "use client";
 
 export const MODEL_OPTIONS = [
-  { id: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet" },
-  { id: "openai/gpt-4o", label: "GPT-4o" },
-  { id: "google/gemini-1.5-pro", label: "Gemini 1.5 Pro" },
-  { id: "meta-llama/llama-3.1-70b-instruct", label: "Llama 3.1 70B" },
+  { id: "strong", label: "Best available (recommended)" },
+  { id: "fast", label: "Fast" },
 ];
 
 export default function SettingsPanel({
