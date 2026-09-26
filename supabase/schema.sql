@@ -1,7 +1,7 @@
 -- Omni Agent schema: chat sessions + messages.
 -- No per-user auth — the whole app sits behind a single shared PIN
--- (checked in middleware), and all reads/writes go through the
--- service-role key from API routes. RLS is not used here.
+-- (checked in middleware). RLS is disabled: the anon key already has
+-- full table grants (Supabase's default), so API routes just use that.
 
 create table if not exists public.chat_sessions (
   id uuid primary key default gen_random_uuid(),

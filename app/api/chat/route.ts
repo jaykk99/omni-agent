@@ -4,6 +4,8 @@ import { createBrowserSession, runBrowserAction } from "@/lib/browser";
 import { getOrCreateSandbox, runInSandbox } from "@/lib/sandbox";
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 const SYSTEM_PROMPT: ChatMessage = {
   role: "system",
   content:

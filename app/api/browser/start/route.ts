@@ -2,6 +2,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { createBrowserSession } from "@/lib/browser";
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: Request) {
   const supabase = createServiceClient();
 
