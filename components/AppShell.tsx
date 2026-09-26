@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import ChatPanel, { type Message } from "@/components/ChatPanel";
 import BrowserPane from "@/components/BrowserPane";
+import TerminalPane, { type TerminalEntry } from "@/components/TerminalPane";
 
 type SessionSummary = {
   id: string;
@@ -11,12 +11,14 @@ type SessionSummary = {
   created_at: string;
 };
 
-export default function AppShell({ userEmail }: { userEmail: string }) {
+export default function AppShell() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [liveViewUrl, setLiveViewUrl] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([]);
+  const [rightTab, setRightTab] = useState<"browser" | "terminal">("browser");
   const startedBrowser = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -52,6 +54,7 @@ export default function AppShell({ userEmail }: { userEmail: string }) {
   async function selectSession(id: string) {
     setActiveSessionId(id);
     setLiveViewUrl(null);
+    setTerminalEntries([]);
     const res = await fetch(`/api/messages?sessionId=${id}`);
     const data = await res.json();
     setMessages(data.messages ?? []);
@@ -96,15 +99,28 @@ export default function AppShell({ userEmail }: { userEmail: string }) {
           content: data.reply ?? data.error ?? "Something went wrong.",
         },
       ]);
+      const newTerminalEntries: TerminalEntry[] = (data.events ?? [])
+        .filter((e: { type: string }) => e.type === "terminal")
+        .map((e: { detail: string }) => {
+          try {
+            return JSON.parse(e.detail);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+      if (newTerminalEntries.length > 0) {
+        setTerminalEntries((prev) => [...prev, ...newTerminalEntries]);
+        setRightTab("terminal");
+      }
     } finally {
       setSending(false);
     }
   }
 
-  async function signOut() {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    window.location.href = "/login";
+  async function lockApp() {
+    await fetch("/api/gate", { method: "DELETE" });
+    window.location.href = "/gate";
   }
 
   return (
@@ -135,12 +151,11 @@ export default function AppShell({ userEmail }: { userEmail: string }) {
           ))}
         </div>
         <div className="border-t border-base-700 p-3">
-          <p className="mb-2 truncate text-xs text-neutral-500">{userEmail}</p>
           <button
-            onClick={signOut}
+            onClick={lockApp}
             className="text-xs text-neutral-400 hover:text-white"
           >
-            Sign out
+            Lock
           </button>
         </div>
       </aside>
@@ -150,7 +165,35 @@ export default function AppShell({ userEmail }: { userEmail: string }) {
           <ChatPanel messages={messages} onSend={sendMessage} sending={sending} />
         </div>
         <div className="flex w-1/2 flex-col">
-          <BrowserPane liveViewUrl={liveViewUrl} />
+          <div className="flex border-b border-base-700">
+            <button
+              onClick={() => setRightTab("browser")}
+              className={`flex-1 px-4 py-2 text-xs uppercase tracking-wide ${
+                rightTab === "browser"
+                  ? "bg-base-800 text-white"
+                  : "text-neutral-500 hover:text-neutral-300"
+              }`}
+            >
+              Browser
+            </button>
+            <button
+              onClick={() => setRightTab("terminal")}
+              className={`flex-1 px-4 py-2 text-xs uppercase tracking-wide ${
+                rightTab === "terminal"
+                  ? "bg-base-800 text-white"
+                  : "text-neutral-500 hover:text-neutral-300"
+              }`}
+            >
+              Terminal
+            </button>
+          </div>
+          <div className="flex-1">
+            {rightTab === "browser" ? (
+              <BrowserPane liveViewUrl={liveViewUrl} />
+            ) : (
+              <TerminalPane entries={terminalEntries} />
+            )}
+          </div>
         </div>
       </main>
     </div>

@@ -1,12 +1,8 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
-  const supabase = createClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const supabase = createServiceClient();
 
   const { searchParams } = new URL(request.url);
   const sessionId = searchParams.get("sessionId");
@@ -18,7 +14,6 @@ export async function GET(request: Request) {
     .from("chat_sessions")
     .select("id")
     .eq("id", sessionId)
-    .eq("user_id", auth.user.id)
     .single();
 
   if (!session) {

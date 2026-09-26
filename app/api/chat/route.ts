@@ -1,16 +1,21 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { chatCompletion, type ChatMessage, type ToolDefinition } from "@/lib/omniroute";
 import { createBrowserSession, runBrowserAction } from "@/lib/browser";
+import { getOrCreateSandbox, runInSandbox } from "@/lib/sandbox";
 import { NextResponse } from "next/server";
 
 const SYSTEM_PROMPT: ChatMessage = {
   role: "system",
   content:
-    "You are Omni Agent, a helpful assistant with a real live browser you can drive. " +
+    "You are Omni Agent, a helpful assistant with a real live browser you can drive and a real " +
+    "Linux terminal you can run commands in. " +
     "Use the browser tool whenever the person asks about something on the web, needs current " +
     "information, or asks you to look something up, visit a site, or click through a page. " +
-    "Narrate what you found in plain language rather than dumping raw page text. " +
-    "If the browser tool errors, say so plainly instead of guessing.",
+    "Use the terminal tool whenever the person asks you to run a command, install a package, " +
+    "write/execute code, or otherwise needs a real shell — it's a persistent Linux sandbox that " +
+    "stays alive for this chat, so files and installed packages carry over between commands. " +
+    "Narrate what you found in plain language rather than dumping raw page or terminal output. " +
+    "If a tool errors, say so plainly instead of guessing.",
 };
 
 const BROWSER_TOOL: ToolDefinition = {
@@ -35,12 +40,30 @@ const BROWSER_TOOL: ToolDefinition = {
   },
 };
 
+const TERMINAL_TOOL: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "terminal_action",
+    description:
+      "Run a shell command in a persistent Linux sandbox scoped to this chat session. " +
+      "Use it to install packages (npm, pip, apt-get, etc.), write and run scripts, inspect files, " +
+      "or anything else that needs a real terminal. State (installed packages, files) persists " +
+      "across calls within the same chat.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description: "The shell command to run, e.g. 'npm install lodash' or 'python3 script.py'.",
+        },
+      },
+      required: ["command"],
+    },
+  },
+};
+
 export async function POST(request: Request) {
-  const supabase = createClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const supabase = createServiceClient();
 
   const { sessionId, message } = await request.json();
   if (!sessionId || !message) {
@@ -54,7 +77,6 @@ export async function POST(request: Request) {
     .from("chat_sessions")
     .select("*")
     .eq("id", sessionId)
-    .eq("user_id", auth.user.id)
     .single();
 
   if (!session) {
@@ -83,11 +105,12 @@ export async function POST(request: Request) {
 
   let connectUrl = session.browserbase_connect_url as string | null;
   let browserbaseSessionId = session.browserbase_session_id as string | null;
+  let sandboxId = session.vercel_sandbox_id as string | null;
 
   const events: { type: string; detail?: string }[] = [];
 
   for (let i = 0; i < 5; i++) {
-    const completion = await chatCompletion(messages, [BROWSER_TOOL]);
+    const completion = await chatCompletion(messages, [BROWSER_TOOL, TERMINAL_TOOL]);
     const choice = completion.choices[0];
     const assistantMessage = choice.message;
     messages.push(assistantMessage);
@@ -103,6 +126,51 @@ export async function POST(request: Request) {
     }
 
     for (const call of assistantMessage.tool_calls) {
+      if (call.function.name === "terminal_action") {
+        let termArgs: { command: string } = { command: "" };
+        try {
+          termArgs = JSON.parse(call.function.arguments);
+        } catch {
+          // fall through with default
+        }
+
+        let toolResultText: string;
+        try {
+          const { sandbox, sandboxId: newId, created } = await getOrCreateSandbox(sandboxId);
+          if (created) {
+            sandboxId = newId;
+            await supabase
+              .from("chat_sessions")
+              .update({ vercel_sandbox_id: newId })
+              .eq("id", sessionId);
+          }
+
+          const result = await runInSandbox(sandbox, termArgs.command || "true");
+          events.push({
+            type: "terminal",
+            detail: JSON.stringify({
+              command: result.command,
+              exitCode: result.exitCode,
+              stdout: result.stdout,
+              stderr: result.stderr,
+            }),
+          });
+          toolResultText = JSON.stringify(result);
+        } catch (err) {
+          toolResultText = JSON.stringify({
+            error: err instanceof Error ? err.message : "Terminal action failed",
+          });
+        }
+
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: "terminal_action",
+          content: toolResultText,
+        });
+        continue;
+      }
+
       let args: { action: string; value?: string } = { action: "read" };
       try {
         args = JSON.parse(call.function.arguments);

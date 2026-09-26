@@ -1,13 +1,9 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { createBrowserSession } from "@/lib/browser";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
-  const supabase = createClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const supabase = createServiceClient();
 
   const { sessionId } = await request.json();
   if (!sessionId) {
@@ -23,8 +19,7 @@ export async function POST(request: Request) {
         browserbase_session_id: bb.sessionId,
         browserbase_connect_url: bb.connectUrl,
       })
-      .eq("id", sessionId)
-      .eq("user_id", auth.user.id);
+      .eq("id", sessionId);
 
     return NextResponse.json({
       sessionId: bb.sessionId,
