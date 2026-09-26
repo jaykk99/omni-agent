@@ -5,6 +5,7 @@ import { getOrCreateSandbox, runInSandbox } from "@/lib/sandbox";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const SYSTEM_PROMPT: ChatMessage = {
   role: "system",
@@ -112,7 +113,20 @@ export async function POST(request: Request) {
   const events: { type: string; detail?: string }[] = [];
 
   for (let i = 0; i < 5; i++) {
-    const completion = await chatCompletion(messages, [BROWSER_TOOL, TERMINAL_TOOL], model);
+    let completion;
+    try {
+      completion = await chatCompletion(messages, [BROWSER_TOOL, TERMINAL_TOOL], model);
+    } catch (err) {
+      const reply =
+        "The model gateway didn't respond in time — try again in a moment. " +
+        (err instanceof Error ? `(${err.message})` : "");
+      await supabase.from("chat_messages").insert({
+        session_id: sessionId,
+        role: "assistant",
+        content: reply,
+      });
+      return NextResponse.json({ reply, events });
+    }
     const choice = completion.choices[0];
     const assistantMessage = choice.message;
     messages.push(assistantMessage);
