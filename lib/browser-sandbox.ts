@@ -29,7 +29,11 @@ const ACTION_PATH = `${SERVER_DIR}/action.json`;
 const SERVER_SCRIPT = `
 const http = require('http');
 const { chromium: pwChromium } = require('playwright-core');
-const chromium = require('@sparticuz/chromium');
+// @sparticuz/chromium is ESM-only ("type":"module") — Node's require(esm)
+// interop hands back the module namespace object here, with the real API
+// under .default, rather than throwing.
+const chromiumModule = require('@sparticuz/chromium');
+const chromium = chromiumModule.default || chromiumModule;
 
 let pagePromise = null;
 async function getPage() {
