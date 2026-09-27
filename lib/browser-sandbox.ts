@@ -136,17 +136,23 @@ async function ensureServer(sandbox: Sandbox): Promise<void> {
     { path: `${SERVER_DIR}/server.js`, content: Buffer.from(SERVER_SCRIPT, "utf-8") },
   ]);
 
-  // This is the one-time slow part of a fresh sandbox (downloading a ~50MB
-  // pre-built Chromium, no system package manager involved), not something
-  // paid on every action — the server then stays up for the sandbox's whole
-  // life.
+  // The sandbox image is Amazon Linux 2023 (confirmed live — no apt/apk, but
+  // dnf/yum are present) with no X11/graphics stack installed by default, so
+  // @sparticuz/chromium's binary still fails to launch on a bare image
+  // ("libnspr4.so: cannot open shared object file") until the handful of
+  // shared libraries Chromium actually needs are installed. This is the
+  // one-time slow part of a fresh sandbox — the server then stays up for
+  // the sandbox's whole life.
   const install = await sandbox.runCommand({
     cmd: "bash",
     args: [
       "-lc",
-      `cd ${SERVER_DIR} && npm init -y >/tmp/omni-browser-install.log 2>&1 && ` +
+      `(dnf install -y nss nspr atk cups-libs gtk3 pango at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm libxkbcommon libdrm alsa-lib dbus-libs libxshmfence >/tmp/omni-browser-install.log 2>&1 || ` +
+        `yum install -y nss nspr atk cups-libs gtk3 pango at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm libxkbcommon libdrm alsa-lib dbus-libs libxshmfence >>/tmp/omni-browser-install.log 2>&1) && ` +
+        `cd ${SERVER_DIR} && npm init -y >>/tmp/omni-browser-install.log 2>&1 && ` +
         `npm install playwright-core@1.49.0 @sparticuz/chromium@153.0.0 >>/tmp/omni-browser-install.log 2>&1`,
     ],
+    sudo: true,
   });
 
   if (install.exitCode !== 0) {
