@@ -37,6 +37,16 @@ const chromium = chromiumModule.default || chromiumModule;
 
 let pagePromise = null;
 async function getPage() {
+  // Don't let one failed launch (or a crashed/closed page) poison the
+  // browser for the rest of the sandbox's life — start over instead.
+  if (pagePromise) {
+    try {
+      const existing = await pagePromise;
+      if (existing.isClosed()) pagePromise = null;
+    } catch {
+      pagePromise = null;
+    }
+  }
   if (!pagePromise) {
     pagePromise = (async () => {
       // The sandbox image has no apt/yum, so a normal "npx playwright install"
@@ -147,10 +157,14 @@ async function ensureServer(sandbox: Sandbox): Promise<void> {
     cmd: "bash",
     args: [
       "-lc",
-      `(dnf install -y nss nspr atk cups-libs gtk3 pango at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm libxkbcommon libdrm alsa-lib dbus-libs libxshmfence >/tmp/omni-browser-install.log 2>&1 || ` +
-        `yum install -y nss nspr atk cups-libs gtk3 pango at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm libxkbcommon libdrm alsa-lib dbus-libs libxshmfence >>/tmp/omni-browser-install.log 2>&1) && ` +
-        `cd ${SERVER_DIR} && npm init -y >>/tmp/omni-browser-install.log 2>&1 && ` +
-        `npm install playwright-core@1.49.0 @sparticuz/chromium@153.0.0 >>/tmp/omni-browser-install.log 2>&1`,
+      // System libs and npm packages are independent — install them in
+      // parallel to cut the cold-start time, then fail if either failed.
+      `LIBS="nss nspr atk cups-libs gtk3 pango at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm libxkbcommon libdrm alsa-lib dbus-libs libxshmfence"; ` +
+        `(dnf install -y $LIBS || yum install -y $LIBS) >/tmp/omni-browser-dnf.log 2>&1 & DNF=$!; ` +
+        `(cd ${SERVER_DIR} && npm init -y && npm install playwright-core@1.49.0 @sparticuz/chromium@153.0.0) >/tmp/omni-browser-npm.log 2>&1 & NPM=$!; ` +
+        `wait $DNF; D=$?; wait $NPM; N=$?; ` +
+        `cat /tmp/omni-browser-dnf.log /tmp/omni-browser-npm.log > /tmp/omni-browser-install.log; ` +
+        `[ $D -eq 0 ] && [ $N -eq 0 ]`,
     ],
     sudo: true,
   });

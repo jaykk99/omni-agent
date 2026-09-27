@@ -26,7 +26,15 @@ export async function getOrCreateSandbox(existingId?: string | null): Promise<{
   if (existingId) {
     try {
       const sandbox = await Sandbox.get({ sandboxId: existingId });
-      return { sandbox, sandboxId: existingId, created: false };
+      // get() can hand back a sandbox that has already timed out rather than
+      // throwing — reusing it would make every command in an older chat
+      // fail. Only reuse one that's actually alive.
+      if (sandbox.status === "running" || sandbox.status === "pending") {
+        // Keep an active chat's sandbox from expiring mid-conversation.
+        // Best effort: this can fail once the plan's max lifetime is hit.
+        await sandbox.extendTimeout(10 * 60 * 1000).catch(() => {});
+        return { sandbox, sandboxId: existingId, created: false };
+      }
     } catch {
       // Sandbox expired or was reclaimed — fall through and create a new one.
     }

@@ -3,9 +3,11 @@
 export default function BrowserPane({
   liveViewUrl,
   screenshotUrl,
+  status,
 }: {
   liveViewUrl: string | null;
   screenshotUrl?: string | null;
+  status?: string | null;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -28,8 +30,8 @@ export default function BrowserPane({
           />
         ) : (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-neutral-500">
-            The browser pane opens here once the assistant starts a session,
-            or as soon as this chat's browser session is ready.
+            {status ??
+              "The browser pane opens here once the assistant starts a session, or as soon as this chat's browser session is ready."}
           </div>
         )}
       </div>

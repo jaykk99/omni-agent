@@ -7,6 +7,12 @@ export type Message = {
   id: string;
   role: string;
   content: string;
+  /** Screenshot of where the browser ended up for this reply, if it browsed.
+   *  Shown inline so navigation is visible even on mobile, where the
+   *  browser pane sits behind its own tab. */
+  screenshot?: string;
+  /** Pages the agent visited while producing this reply. */
+  visited?: string[];
 };
 
 export default function ChatPanel({
@@ -46,7 +52,19 @@ export default function ChatPanel({
                 : "bg-base-800 text-neutral-100"
             )}
           >
-            {m.content}
+            <div className="whitespace-pre-wrap">{m.content}</div>
+            {m.visited && m.visited.length > 0 && (
+              <div className="mt-2 text-xs text-neutral-400">
+                Visited: {m.visited.join(" → ")}
+              </div>
+            )}
+            {m.screenshot && (
+              <img
+                src={m.screenshot}
+                alt="Where the browser ended up"
+                className="mt-2 w-full rounded-lg border border-base-700"
+              />
+            )}
           </div>
         ))}
         {sending && (

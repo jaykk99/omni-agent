@@ -20,6 +20,7 @@ export default function AppShell() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [liveViewUrl, setLiveViewUrl] = useState<string | null>(null);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [browserStatus, setBrowserStatus] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([]);
   const [rightTab, setRightTab] = useState<"browser" | "terminal">("browser");
@@ -79,6 +80,7 @@ export default function AppShell() {
     setActiveSessionId(id);
     setLiveViewUrl(null);
     setScreenshotUrl(null);
+    setBrowserStatus(null);
     setTerminalEntries([]);
     setMobileView("chat");
     const res = await fetch(`/api/messages?sessionId=${id}`);
@@ -110,6 +112,7 @@ export default function AppShell() {
   function ensureBrowser(id: string) {
     if (browserReady.current.has(id)) return browserReady.current.get(id)!;
     const promise = (async () => {
+      setBrowserStatus("Starting browser… (a new chat's first start takes about 30 seconds)");
       try {
         const res = await fetch("/api/browser/start", {
           method: "POST",
@@ -119,8 +122,9 @@ export default function AppShell() {
         const data = await res.json();
         if (data.liveViewUrl) setLiveViewUrl(data.liveViewUrl);
         if (data.screenshotDataUrl) setScreenshotUrl(data.screenshotDataUrl);
+        setBrowserStatus(data.error ? `Browser couldn't start: ${String(data.error).slice(0, 200)}` : null);
       } catch {
-        // Browser pane stays idle if Browserbase isn't configured yet.
+        setBrowserStatus("Browser couldn't start — it will retry when the assistant next uses it.");
       }
     })();
     browserReady.current.set(id, promise);
@@ -150,37 +154,64 @@ export default function AppShell() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: activeSessionId, message: text, model }),
       });
-      const data = await res.json();
+      // A platform-level failure (timeout, crash) comes back as an HTML error
+      // page, not JSON — surface that instead of silently showing nothing.
+      let data: { reply?: string; error?: string; events?: { type: string; detail?: string }[] };
+      try {
+        data = await res.json();
+      } catch {
+        data = {
+          error: `The server didn't respond properly (HTTP ${res.status}). Please try again.`,
+        };
+      }
+      const events = data.events ?? [];
+      const latestScreenshot = [...events].reverse().find((e) => e.type === "screenshot");
+      const visited = events
+        .filter((e) => e.type === "navigate" && e.detail && e.detail !== "error" && e.detail !== "about:blank")
+        .map((e) => e.detail as string)
+        .filter((url, i, arr) => arr.indexOf(url) === i);
       setMessages((prev) => [
         ...prev,
         {
           id: `reply-${Date.now()}`,
           role: "assistant",
           content: data.reply ?? data.error ?? "Something went wrong.",
+          screenshot: latestScreenshot?.detail,
+          visited,
         },
       ]);
-      const latestScreenshot = [...(data.events ?? [])]
-        .reverse()
-        .find((e: { type: string }) => e.type === "screenshot") as
-        | { detail: string }
-        | undefined;
-      if (latestScreenshot) setScreenshotUrl(latestScreenshot.detail);
+      if (latestScreenshot?.detail) {
+        setScreenshotUrl(latestScreenshot.detail);
+        setBrowserStatus(null);
+      }
 
-      const newTerminalEntries: TerminalEntry[] = (data.events ?? [])
-        .filter((e: { type: string }) => e.type === "terminal")
-        .map((e: { detail: string }) => {
+      const newTerminalEntries: TerminalEntry[] = events
+        .filter((e) => e.type === "terminal")
+        .map((e) => {
           try {
-            return JSON.parse(e.detail);
+            return JSON.parse(e.detail ?? "") as TerminalEntry;
           } catch {
             return null;
           }
         })
-        .filter(Boolean);
+        .filter((e): e is TerminalEntry => e !== null);
       if (newTerminalEntries.length > 0) {
         setTerminalEntries((prev) => [...prev, ...newTerminalEntries]);
         setRightTab("terminal");
         setMobileView("right");
+      } else if (latestScreenshot) {
+        // Desktop: bring the browser tab forward if the terminal was showing.
+        setRightTab("browser");
       }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `reply-${Date.now()}`,
+          role: "assistant",
+          content: "Couldn't reach the server — check your connection and try again.",
+        },
+      ]);
     } finally {
       setSending(false);
     }
@@ -357,7 +388,11 @@ export default function AppShell() {
           </div>
           <div className="flex-1">
             {rightTab === "browser" ? (
-              <BrowserPane liveViewUrl={liveViewUrl} screenshotUrl={screenshotUrl} />
+              <BrowserPane
+                liveViewUrl={liveViewUrl}
+                screenshotUrl={screenshotUrl}
+                status={browserStatus}
+              />
             ) : (
               <TerminalPane entries={terminalEntries} />
             )}

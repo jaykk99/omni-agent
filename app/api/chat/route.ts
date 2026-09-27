@@ -117,7 +117,9 @@ export async function POST(request: Request) {
 
   const events: { type: string; detail?: string }[] = [];
 
-  for (let i = 0; i < 5; i++) {
+  // Real browsing tasks often take several steps (goto → click → read →
+  // click...), so allow more than the original 5 before giving up.
+  for (let i = 0; i < 8; i++) {
     let completion;
     try {
       completion = await chatCompletion(messages, [BROWSER_TOOL, TERMINAL_TOOL], model);
