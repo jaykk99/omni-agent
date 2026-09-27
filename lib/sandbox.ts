@@ -6,7 +6,10 @@
 
 import { Sandbox } from "@vercel/sandbox";
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.SANDBOX_TIMEOUT_MS ?? 10 * 60 * 1000); // 10 min
+// 30 min default: long enough to cover the one-time playwright+chromium
+// install the sandbox browser does on its first use (lib/browser-sandbox.ts)
+// plus a real chat session, without the sandbox expiring mid-conversation.
+const DEFAULT_TIMEOUT_MS = Number(process.env.SANDBOX_TIMEOUT_MS ?? 30 * 60 * 1000); // 30 min
 
 export type TerminalResult = {
   command: string;

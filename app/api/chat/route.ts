@@ -1,11 +1,14 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { chatCompletion, type ChatMessage, type ToolDefinition } from "@/lib/omniroute";
-import { createBrowserSession, runBrowserAction } from "@/lib/browser";
+import { runBrowserActionInSandbox } from "@/lib/browser-sandbox";
 import { getOrCreateSandbox, runInSandbox } from "@/lib/sandbox";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Bumped from 60s: browser actions now run a real Chromium inside the
+// sandbox (see lib/browser-sandbox.ts), and a cold sandbox's first browser
+// action installs playwright + chromium there (roughly 30-90s).
+export const maxDuration = 300;
 
 const SYSTEM_PROMPT: ChatMessage = {
   role: "system",
@@ -106,8 +109,10 @@ export async function POST(request: Request) {
     })),
   ];
 
-  let connectUrl = session.browserbase_connect_url as string | null;
-  let browserbaseSessionId = session.browserbase_session_id as string | null;
+  // Browser and terminal tools now share one sandbox per chat session
+  // (session.browserbase_connect_url / browserbase_session_id are legacy —
+  // left in the schema but no longer written to; see lib/browser-sandbox.ts
+  // for why the browser moved off Browserbase).
   let sandboxId = session.vercel_sandbox_id as string | null;
 
   const events: { type: string; detail?: string }[] = [];
@@ -196,26 +201,30 @@ export async function POST(request: Request) {
 
       let toolResultText: string;
       try {
-        if (!connectUrl) {
-          const bb = await createBrowserSession();
-          connectUrl = bb.connectUrl;
-          browserbaseSessionId = bb.sessionId;
+        const { sandbox, sandboxId: newId, created } = await getOrCreateSandbox(sandboxId);
+        if (created) {
+          sandboxId = newId;
           await supabase
             .from("chat_sessions")
-            .update({
-              browserbase_session_id: bb.sessionId,
-              browserbase_connect_url: bb.connectUrl,
-            })
+            .update({ vercel_sandbox_id: newId })
             .eq("id", sessionId);
         }
 
-        const result = await runBrowserAction(
-          connectUrl,
+        const result = await runBrowserActionInSandbox(
+          sandbox,
           args.action as "goto" | "click" | "back" | "read",
           args.value
         );
-        events.push({ type: "navigate", detail: result.url });
-        toolResultText = JSON.stringify(result);
+        if (result.screenshotDataUrl) {
+          events.push({ type: "screenshot", detail: result.screenshotDataUrl });
+        }
+        if (result.error) {
+          events.push({ type: "navigate", detail: result.url || "error" });
+          toolResultText = JSON.stringify({ error: result.error });
+        } else {
+          events.push({ type: "navigate", detail: result.url });
+          toolResultText = JSON.stringify({ url: result.url, title: result.title, text: result.text });
+        }
       } catch (err) {
         toolResultText = JSON.stringify({
           error: err instanceof Error ? err.message : "Browser action failed",

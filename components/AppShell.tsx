@@ -19,6 +19,7 @@ export default function AppShell() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [liveViewUrl, setLiveViewUrl] = useState<string | null>(null);
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([]);
   const [rightTab, setRightTab] = useState<"browser" | "terminal">("browser");
@@ -77,6 +78,7 @@ export default function AppShell() {
   async function selectSession(id: string) {
     setActiveSessionId(id);
     setLiveViewUrl(null);
+    setScreenshotUrl(null);
     setTerminalEntries([]);
     setMobileView("chat");
     const res = await fetch(`/api/messages?sessionId=${id}`);
@@ -116,6 +118,7 @@ export default function AppShell() {
         });
         const data = await res.json();
         if (data.liveViewUrl) setLiveViewUrl(data.liveViewUrl);
+        if (data.screenshotDataUrl) setScreenshotUrl(data.screenshotDataUrl);
       } catch {
         // Browser pane stays idle if Browserbase isn't configured yet.
       }
@@ -156,6 +159,13 @@ export default function AppShell() {
           content: data.reply ?? data.error ?? "Something went wrong.",
         },
       ]);
+      const latestScreenshot = [...(data.events ?? [])]
+        .reverse()
+        .find((e: { type: string }) => e.type === "screenshot") as
+        | { detail: string }
+        | undefined;
+      if (latestScreenshot) setScreenshotUrl(latestScreenshot.detail);
+
       const newTerminalEntries: TerminalEntry[] = (data.events ?? [])
         .filter((e: { type: string }) => e.type === "terminal")
         .map((e: { detail: string }) => {
@@ -347,7 +357,7 @@ export default function AppShell() {
           </div>
           <div className="flex-1">
             {rightTab === "browser" ? (
-              <BrowserPane liveViewUrl={liveViewUrl} />
+              <BrowserPane liveViewUrl={liveViewUrl} screenshotUrl={screenshotUrl} />
             ) : (
               <TerminalPane entries={terminalEntries} />
             )}

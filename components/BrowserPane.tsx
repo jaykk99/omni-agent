@@ -2,16 +2,24 @@
 
 export default function BrowserPane({
   liveViewUrl,
+  screenshotUrl,
 }: {
   liveViewUrl: string | null;
+  screenshotUrl?: string | null;
 }) {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-base-700 px-4 py-3 text-xs uppercase tracking-wide text-neutral-500">
         Live browser
       </div>
-      <div className="flex-1 bg-black">
-        {liveViewUrl ? (
+      <div className="flex flex-1 items-center justify-center bg-black">
+        {screenshotUrl ? (
+          <img
+            src={screenshotUrl}
+            alt="Current browser view"
+            className="h-full w-full object-contain"
+          />
+        ) : liveViewUrl ? (
           <iframe
             src={liveViewUrl}
             className="h-full w-full border-0"
