@@ -26,7 +26,7 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [model, setModel] = useState(MODEL_OPTIONS[0].id);
-  const startedBrowser = useRef<Set<string>>(new Set());
+  const browserReady = useRef<Map<string, Promise<void>>>(new Map());
 
   useEffect(() => {
     loadSessions();
@@ -105,20 +105,23 @@ export default function AppShell() {
     }
   }
 
-  async function ensureBrowser(id: string) {
-    if (startedBrowser.current.has(id)) return;
-    startedBrowser.current.add(id);
-    try {
-      const res = await fetch("/api/browser/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: id }),
-      });
-      const data = await res.json();
-      if (data.liveViewUrl) setLiveViewUrl(data.liveViewUrl);
-    } catch {
-      // Browser pane stays idle if Browserbase isn't configured yet.
-    }
+  function ensureBrowser(id: string) {
+    if (browserReady.current.has(id)) return browserReady.current.get(id)!;
+    const promise = (async () => {
+      try {
+        const res = await fetch("/api/browser/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: id }),
+        });
+        const data = await res.json();
+        if (data.liveViewUrl) setLiveViewUrl(data.liveViewUrl);
+      } catch {
+        // Browser pane stays idle if Browserbase isn't configured yet.
+      }
+    })();
+    browserReady.current.set(id, promise);
+    return promise;
   }
 
   async function sendMessage(text: string) {
@@ -129,6 +132,16 @@ export default function AppShell() {
       { id: `local-${Date.now()}`, role: "user", content: text },
     ]);
     try {
+      // The browser session (and its browserbase_connect_url on the session
+      // row) has to exist in the DB *before* /api/chat runs, or the chat
+      // route's own "create one if missing" fallback races ensureBrowser's
+      // call above and wins — creating a SECOND Browserbase session that
+      // the agent actually navigates, while this pane keeps showing the
+      // live view of the first, now-idle one. Nothing ever appears to move.
+      // Awaiting here (it's already in flight from selectSession, usually
+      // resolved by the time someone finishes typing) makes sure there's
+      // only ever one session per chat.
+      await ensureBrowser(activeSessionId);
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
