@@ -1,8 +1,16 @@
 "use client";
 
+// "fast" listed first (and used as the default, via MODEL_OPTIONS[0] in
+// AppShell.tsx) rather than "strong": live-testing the browser tool today
+// showed "fast" reliably emitting our TOOL_CALL: text contract, while
+// "strong" (a rotating pool of stronger/pricier models on the error-inbox
+// side) sometimes emits its own native function-calling syntax instead
+// (e.g. a Gemini-style <tool_code> block) which our text-based parser can't
+// recognize — so tool use, including browsing, is currently more reliable
+// on "fast" despite the name.
 export const MODEL_OPTIONS = [
-  { id: "strong", label: "Best available (recommended)" },
-  { id: "fast", label: "Fast" },
+  { id: "fast", label: "Fast (recommended — most reliable for browsing)" },
+  { id: "strong", label: "Best available (slower, less reliable with tools)" },
 ];
 
 export default function SettingsPanel({

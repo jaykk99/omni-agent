@@ -1,5 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { getOrCreateSandbox, runInSandbox } from "@/lib/sandbox";
+import { getOrCreateSandbox } from "@/lib/sandbox";
 import { runBrowserActionInSandbox } from "@/lib/browser-sandbox";
 import { NextResponse } from "next/server";
 
@@ -39,24 +39,10 @@ export async function POST(request: Request) {
     // than waiting for the first real navigation.
     const result = await runBrowserActionInSandbox(sandbox, "read");
 
-    // TEMP diagnostic (remove once the sandbox base image's shared-library
-    // situation is confirmed): surfaces what's actually available in the
-    // sandbox so a missing-library launch failure can be root-caused
-    // instead of guessed at.
-    let diag: string | undefined;
-    if (result.error) {
-      const probe = await runInSandbox(
-        sandbox,
-        "cat /etc/os-release 2>&1; echo ---LIBS---; ldconfig -p 2>&1 | grep -iE 'nss|nspr|atk|cups|gtk|pango|cairo|x11|dbus|expat|drm|gbm'; echo ---PKGMGR---; which apk dnf yum tdnf zypper apt apt-get 2>&1; echo ---ARCH---; uname -m"
-      );
-      diag = `${probe.stdout}\n${probe.stderr}`.slice(0, 4000);
-    }
-
     return NextResponse.json({
       sandboxId,
       screenshotDataUrl: result.screenshotDataUrl,
       error: result.error,
-      diag,
     });
   } catch (err) {
     return NextResponse.json(
