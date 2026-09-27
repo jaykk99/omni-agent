@@ -28,13 +28,24 @@ const ACTION_PATH = `${SERVER_DIR}/action.json`;
 // global fetch is available — no curl dependency needed).
 const SERVER_SCRIPT = `
 const http = require('http');
-const { chromium } = require('playwright');
+const { chromium: pwChromium } = require('playwright-core');
+const chromium = require('@sparticuz/chromium');
 
 let pagePromise = null;
 async function getPage() {
   if (!pagePromise) {
     pagePromise = (async () => {
-      const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+      // The sandbox image has no apt/yum, so a normal "npx playwright install"
+      // (which shells out to a system package manager for shared libs) fails.
+      // @sparticuz/chromium ships a statically-linked Chromium build made
+      // exactly for restricted serverless environments like this one — no
+      // system package manager needed at all.
+      const executablePath = await chromium.executablePath();
+      const browser = await pwChromium.launch({
+        executablePath,
+        args: chromium.args,
+        headless: true,
+      });
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       return await context.newPage();
     })();
@@ -121,19 +132,17 @@ async function ensureServer(sandbox: Sandbox): Promise<void> {
     { path: `${SERVER_DIR}/server.js`, content: Buffer.from(SERVER_SCRIPT, "utf-8") },
   ]);
 
-  // Playwright's own CLI downloads a matching Chromium build plus its
-  // shared-library dependencies. This is the one-time slow part of a fresh
-  // sandbox (roughly 30-90s depending on network), not something paid on
-  // every action — the server then stays up for the sandbox's whole life.
+  // This is the one-time slow part of a fresh sandbox (downloading a ~50MB
+  // pre-built Chromium, no system package manager involved), not something
+  // paid on every action — the server then stays up for the sandbox's whole
+  // life.
   const install = await sandbox.runCommand({
     cmd: "bash",
     args: [
       "-lc",
       `cd ${SERVER_DIR} && npm init -y >/tmp/omni-browser-install.log 2>&1 && ` +
-        `npm install playwright@1.49.0 >>/tmp/omni-browser-install.log 2>&1 && ` +
-        `npx --yes playwright install --with-deps chromium >>/tmp/omni-browser-install.log 2>&1`,
+        `npm install playwright-core@1.49.0 @sparticuz/chromium@153.0.0 >>/tmp/omni-browser-install.log 2>&1`,
     ],
-    sudo: true,
   });
 
   if (install.exitCode !== 0) {
