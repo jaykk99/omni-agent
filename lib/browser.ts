@@ -106,6 +106,13 @@ export async function runBrowserAction(
 
     return { url, title, text };
   } finally {
-    await browser.close();
+    // NOT browser.close(): for a browser obtained via connectOverCDP (this is
+    // Browserbase's remote session, not a locally-launched one), close() sends
+    // the CDP Browser.close command — which actually shuts the remote browser
+    // down. That was killing the live Browserbase session after the very
+    // first action, which is why the live view went black right after the
+    // agent navigated once. There's nothing to detach here that matters: this
+    // runs in a serverless function that's about to exit anyway, and the next
+    // action reconnects fresh over CDP to the same still-running session.
   }
 }
