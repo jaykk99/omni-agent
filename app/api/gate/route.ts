@@ -8,8 +8,8 @@ export async function POST(request: Request) {
 
   if (!expected) {
     return NextResponse.json(
-      { error: "APP_PIN is not configured" },
-      { status: 500 }
+      { error: "APP_PIN is not configured — the app is running without a PIN gate" },
+      { status: 400 }
     );
   }
 

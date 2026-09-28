@@ -1,7 +1,7 @@
-// Wraps Browserbase (remote headless Chrome) so the assistant gets a real,
-// live-viewable browser instead of a static fetch. Reuses the same
-// BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID pattern already used by the
-// error-inbox project.
+// LEGACY — not imported anywhere. The live browser moved to a Chromium
+// running inside the per-chat Vercel Sandbox (lib/browser-sandbox.ts), which
+// needs no Browserbase key at all. This file is kept only as a reference for
+// anyone who wants the Browserbase path back; it is not part of the app.
 
 const BB_API = "https://api.browserbase.com/v1";
 

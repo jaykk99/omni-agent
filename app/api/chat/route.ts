@@ -1,5 +1,11 @@
-import { createServiceClient } from "@/lib/supabase/server";
-import { chatCompletion, type ChatMessage, type ToolDefinition } from "@/lib/omniroute";
+import { getStore } from "@/lib/store";
+import {
+  chatCompletion,
+  keylessChat,
+  isGatewayConfigured,
+  type ChatMessage,
+  type ToolDefinition,
+} from "@/lib/omniroute";
 import { runBrowserActionInSandbox } from "@/lib/browser-sandbox";
 import { getOrCreateSandbox, runInSandbox } from "@/lib/sandbox";
 import { NextResponse } from "next/server";
@@ -22,6 +28,19 @@ const SYSTEM_PROMPT: ChatMessage = {
     "stays alive for this chat, so files and installed packages carry over between commands. " +
     "Narrate what you found in plain language rather than dumping raw page or terminal output. " +
     "If a tool errors, say so plainly instead of guessing.",
+};
+
+// Keyless mode: no function-calling model, so the assistant must not claim
+// browser/terminal powers it can't exercise right now. Be upfront about it.
+const KEYLESS_SYSTEM_PROMPT: ChatMessage = {
+  role: "system",
+  content:
+    "You are Omni Agent, a helpful AI assistant. You are running in keyless demo " +
+    "mode: you can hold a normal conversation, answer questions, and explain things, " +
+    "but you cannot browse the web or run terminal commands right now — those tools " +
+    "need a configured model gateway. If the person asks you to do something that " +
+    "needs the browser or terminal, say so plainly instead of pretending you did it. " +
+    "Keep answers concise.",
 };
 
 const BROWSER_TOOL: ToolDefinition = {
@@ -69,7 +88,7 @@ const TERMINAL_TOOL: ToolDefinition = {
 };
 
 export async function POST(request: Request) {
-  const supabase = createServiceClient();
+  const store = getStore();
 
   const { sessionId, message, model } = await request.json();
   if (!sessionId || !message) {
@@ -79,43 +98,59 @@ export async function POST(request: Request) {
     );
   }
 
-  const { data: session } = await supabase
-    .from("chat_sessions")
-    .select("*")
-    .eq("id", sessionId)
-    .single();
-
+  const session = await store.getSession(sessionId);
   if (!session) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  await supabase.from("chat_messages").insert({
-    session_id: sessionId,
-    role: "user",
-    content: message,
-  });
+  await store.addMessage(sessionId, "user", message);
 
-  const { data: history } = await supabase
-    .from("chat_messages")
-    .select("role, content")
-    .eq("session_id", sessionId)
-    .order("created_at", { ascending: true });
-
+  const history = await store.listMessages(sessionId);
   const messages: ChatMessage[] = [
     SYSTEM_PROMPT,
-    ...(history ?? []).map((m) => ({
+    ...history.map((m) => ({
       role: m.role as ChatMessage["role"],
       content: m.content,
     })),
   ];
 
-  // Browser and terminal tools now share one sandbox per chat session
-  // (session.browserbase_connect_url / browserbase_session_id are legacy —
-  // left in the schema but no longer written to; see lib/browser-sandbox.ts
-  // for why the browser moved off Browserbase).
-  let sandboxId = session.vercel_sandbox_id as string | null;
+  // Browser and terminal tools share one sandbox per chat session
+  // (session.browserbase_* columns are legacy — left in the schema but no
+  // longer written to; the browser moved off Browserbase to a Chromium
+  // inside the Vercel Sandbox, see lib/browser-sandbox.ts).
+  let sandboxId = session.vercel_sandbox_id ?? null;
 
   const events: { type: string; detail?: string }[] = [];
+
+  const useKeyless = async (fallbackReason: string | null) => {
+    try {
+      const keylessMessages: ChatMessage[] = [
+        KEYLESS_SYSTEM_PROMPT,
+        ...history.map((m) => ({
+          role: m.role as ChatMessage["role"],
+          content: m.content,
+        })),
+      ];
+      const reply = await keylessChat(keylessMessages);
+      await store.addMessage(sessionId, "assistant", reply);
+      if (fallbackReason) events.push({ type: "notice", detail: fallbackReason });
+      return NextResponse.json({ reply, events });
+    } catch (err) {
+      const reply =
+        "I couldn't reach any chat backend just now — the configured model " +
+        "gateway and the free keyless fallback both failed. " +
+        (err instanceof Error ? `(${err.message}) ` : "") +
+        "Try again in a moment.";
+      await store.addMessage(sessionId, "assistant", reply);
+      return NextResponse.json({ reply, events });
+    }
+  };
+
+  // KEYLESS-FIRST: no gateway key → skip the tool loop entirely and answer
+  // with the free keyless model instead of erroring out.
+  if (!isGatewayConfigured()) {
+    return useKeyless(null);
+  }
 
   // Real browsing tasks often take several steps (goto → click → read →
   // click...), so allow more than the original 5 before giving up.
@@ -124,15 +159,11 @@ export async function POST(request: Request) {
     try {
       completion = await chatCompletion(messages, [BROWSER_TOOL, TERMINAL_TOOL], model);
     } catch (err) {
-      const reply =
-        "The model gateway didn't respond in time — try again in a moment. " +
-        (err instanceof Error ? `(${err.message})` : "");
-      await supabase.from("chat_messages").insert({
-        session_id: sessionId,
-        role: "assistant",
-        content: reply,
-      });
-      return NextResponse.json({ reply, events });
+      // The configured gateway failed — degrade to the keyless fallback
+      // rather than showing a dead end. The notice event lets the UI say why.
+      return useKeyless(
+        `Model gateway failed (${err instanceof Error ? err.message : "unknown error"}) — answered with the free keyless model instead.`
+      );
     }
     const choice = completion.choices[0];
     const assistantMessage = choice.message;
@@ -140,11 +171,7 @@ export async function POST(request: Request) {
 
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
       const finalText = assistantMessage.content ?? "";
-      await supabase.from("chat_messages").insert({
-        session_id: sessionId,
-        role: "assistant",
-        content: finalText,
-      });
+      await store.addMessage(sessionId, "assistant", finalText);
       return NextResponse.json({ reply: finalText, events });
     }
 
@@ -162,10 +189,7 @@ export async function POST(request: Request) {
           const { sandbox, sandboxId: newId, created } = await getOrCreateSandbox(sandboxId);
           if (created) {
             sandboxId = newId;
-            await supabase
-              .from("chat_sessions")
-              .update({ vercel_sandbox_id: newId })
-              .eq("id", sessionId);
+            await store.setSandboxId(sessionId, newId);
           }
 
           const result = await runInSandbox(sandbox, termArgs.command || "true");
@@ -206,10 +230,7 @@ export async function POST(request: Request) {
         const { sandbox, sandboxId: newId, created } = await getOrCreateSandbox(sandboxId);
         if (created) {
           sandboxId = newId;
-          await supabase
-            .from("chat_sessions")
-            .update({ vercel_sandbox_id: newId })
-            .eq("id", sessionId);
+          await store.setSandboxId(sessionId, newId);
         }
 
         const result = await runBrowserActionInSandbox(
@@ -244,10 +265,6 @@ export async function POST(request: Request) {
 
   const fallback =
     "I took several browser steps but couldn't wrap up cleanly — try rephrasing or asking again.";
-  await supabase.from("chat_messages").insert({
-    session_id: sessionId,
-    role: "assistant",
-    content: fallback,
-  });
+  await store.addMessage(sessionId, "assistant", fallback);
   return NextResponse.json({ reply: fallback, events });
 }

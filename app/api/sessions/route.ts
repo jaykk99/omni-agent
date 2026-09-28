@@ -1,44 +1,40 @@
-import { createServiceClient } from "@/lib/supabase/server";
+import { getStore } from "@/lib/store";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const supabase = createServiceClient();
-
-  const { data, error } = await supabase
-    .from("chat_sessions")
-    .select("id, title, created_at")
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  const store = getStore();
+  try {
+    const sessions = await store.listSessions();
+    return NextResponse.json({ sessions });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to load sessions" },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json({ sessions: data });
 }
 
 export async function POST(request: Request) {
-  const supabase = createServiceClient();
+  const store = getStore();
 
   const body = await request.json().catch(() => ({}));
   const title = body?.title || "New chat";
 
-  const { data, error } = await supabase
-    .from("chat_sessions")
-    .insert({ title })
-    .select("id, title, created_at")
-    .single();
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  try {
+    const session = await store.createSession(title);
+    return NextResponse.json({ session });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to create session" },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json({ session: data });
 }
 
 export async function DELETE(request: Request) {
-  const supabase = createServiceClient();
+  const store = getStore();
 
   const { searchParams } = new URL(request.url);
   const sessionId = searchParams.get("id");
@@ -46,11 +42,13 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
 
-  const { error } = await supabase.from("chat_sessions").delete().eq("id", sessionId);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  try {
+    await store.deleteSession(sessionId);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to delete session" },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json({ ok: true });
 }

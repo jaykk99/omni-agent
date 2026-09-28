@@ -1,4 +1,4 @@
-import { createServiceClient } from "@/lib/supabase/server";
+import { getStore } from "@/lib/store";
 import { getOrCreateSandbox } from "@/lib/sandbox";
 import { runBrowserActionInSandbox } from "@/lib/browser-sandbox";
 import { NextResponse } from "next/server";
@@ -9,28 +9,24 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
-  const supabase = createServiceClient();
+  const store = getStore();
 
   const { sessionId } = await request.json();
   if (!sessionId) {
     return NextResponse.json({ error: "sessionId required" }, { status: 400 });
   }
 
-  const { data: session } = await supabase
-    .from("chat_sessions")
-    .select("vercel_sandbox_id")
-    .eq("id", sessionId)
-    .single();
-
   try {
+    const session = await store.getSession(sessionId);
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+
     const { sandbox, sandboxId, created } = await getOrCreateSandbox(
-      session?.vercel_sandbox_id ?? null
+      session.vercel_sandbox_id ?? null
     );
     if (created) {
-      await supabase
-        .from("chat_sessions")
-        .update({ vercel_sandbox_id: sandboxId })
-        .eq("id", sessionId);
+      await store.setSandboxId(sessionId, sandboxId);
     }
 
     // "read" with no navigation just brings the browser server up (if it

@@ -28,10 +28,23 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [model, setModel] = useState(MODEL_OPTIONS[0].id);
+  // What the server can actually do right now (drives the keyless-mode
+  // banner and the chat empty state — never a silent degradation).
+  const [status, setStatus] = useState<{
+    database: boolean;
+    gateway: boolean;
+    pin: boolean;
+  } | null>(null);
   const browserReady = useRef<Map<string, Promise<void>>>(new Map());
 
   useEffect(() => {
     loadSessions();
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((s) => setStatus(s))
+      .catch(() => {
+        // Status endpoint unreachable — don't block the app over it.
+      });
     try {
       const saved = window.localStorage.getItem(MODEL_STORAGE_KEY);
       if (saved) setModel(saved);
@@ -139,15 +152,12 @@ export default function AppShell() {
       { id: `local-${Date.now()}`, role: "user", content: text },
     ]);
     try {
-      // The browser session (and its browserbase_connect_url on the session
-      // row) has to exist in the DB *before* /api/chat runs, or the chat
-      // route's own "create one if missing" fallback races ensureBrowser's
-      // call above and wins — creating a SECOND Browserbase session that
-      // the agent actually navigates, while this pane keeps showing the
-      // live view of the first, now-idle one. Nothing ever appears to move.
-      // Awaiting here (it's already in flight from selectSession, usually
-      // resolved by the time someone finishes typing) makes sure there's
-      // only ever one session per chat.
+      // The sandbox browser session has to exist (and its id stored on the
+      // session row) *before* /api/chat runs, or the chat route's own
+      // get-or-create fallback races this call and the pane can show a stale
+      // state. Awaiting here (already in flight from selectSession, usually
+      // resolved by the time someone finishes typing) keeps one sandbox per
+      // chat.
       await ensureBrowser(activeSessionId);
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -170,8 +180,16 @@ export default function AppShell() {
         .filter((e) => e.type === "navigate" && e.detail && e.detail !== "error" && e.detail !== "about:blank")
         .map((e) => e.detail as string)
         .filter((url, i, arr) => arr.indexOf(url) === i);
+      // Server-side degradations (e.g. gateway failed → keyless fallback)
+      // arrive as notice events; show them inline so nothing is silent.
+      const notices = events.filter((e) => e.type === "notice" && e.detail);
       setMessages((prev) => [
         ...prev,
+        ...notices.map((n, i) => ({
+          id: `notice-${Date.now()}-${i}`,
+          role: "notice",
+          content: n.detail as string,
+        })),
         {
           id: `reply-${Date.now()}`,
           role: "assistant",
@@ -274,8 +292,31 @@ export default function AppShell() {
     </>
   );
 
+  const keyless = status !== null && !status.gateway;
+  const warnings: string[] = [];
+  if (status && !status.gateway) {
+    warnings.push(
+      "Keyless mode — chatting via a free demo model. The live browser and terminal tools need OMNIROUTE_API_KEY (or OPENROUTER_API_KEY) to work."
+    );
+  }
+  if (status && !status.database) {
+    warnings.push(
+      "Chats aren't saved — set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY for persistent history."
+    );
+  }
+
   return (
-    <div className="flex h-screen flex-col bg-base-950 text-white md:flex-row">
+    <div className="flex h-screen flex-col bg-base-950 text-white">
+      {warnings.length > 0 && (
+        <div className="w-full shrink-0 border-b border-amber-800/60 bg-amber-950/50 px-4 py-2">
+          {warnings.map((w, i) => (
+            <p key={i} className="text-xs text-amber-200">
+              ⚠ {w}
+            </p>
+          ))}
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       {/* Mobile top bar */}
       <div className="flex items-center justify-between border-b border-base-700 p-3 md:hidden">
         <button
@@ -357,7 +398,7 @@ export default function AppShell() {
             mobileView === "chat" ? "flex" : "hidden"
           } w-full flex-col border-r border-base-700 md:flex md:w-1/2`}
         >
-          <ChatPanel messages={messages} onSend={sendMessage} sending={sending} />
+          <ChatPanel messages={messages} onSend={sendMessage} sending={sending} keyless={keyless} />
         </div>
         <div
           className={`${
@@ -399,6 +440,7 @@ export default function AppShell() {
           </div>
         </div>
       </main>
+      </div>
 
       <SettingsPanel
         open={settingsOpen}

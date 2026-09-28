@@ -19,10 +19,14 @@ export default function ChatPanel({
   messages,
   onSend,
   sending,
+  keyless = false,
 }: {
   messages: Message[];
   onSend: (text: string) => void;
   sending: boolean;
+  /** True when no model gateway key is configured — the empty state must not
+   *  promise browsing/terminal powers that aren't available in this mode. */
+  keyless?: boolean;
 }) {
   const [input, setInput] = useState("");
 
@@ -38,11 +42,29 @@ export default function ChatPanel({
       <div className="flex-1 space-y-4 overflow-y-auto p-6">
         {messages.length === 0 && (
           <p className="text-sm text-neutral-500">
-            Ask anything — I can browse live to check current info. Try
-            &ldquo;look up today&rsquo;s top story on Hacker News&rdquo;.
+            {keyless ? (
+              <>
+                Keyless demo mode — ask me anything and I&apos;ll do my best.
+                Web browsing and terminal tools unlock once a model key is
+                configured (see the banner above).
+              </>
+            ) : (
+              <>
+                Ask anything — I can browse live to check current info. Try
+                &ldquo;look up today&rsquo;s top story on Hacker News&rdquo;.
+              </>
+            )}
           </p>
         )}
-        {messages.map((m) => (
+        {messages.map((m) =>
+          m.role === "notice" ? (
+            <div
+              key={m.id}
+              className="mx-auto max-w-[95%] rounded-lg border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-center text-xs text-amber-300"
+            >
+              {m.content}
+            </div>
+          ) : (
           <div
             key={m.id}
             className={clsx(
@@ -66,7 +88,8 @@ export default function ChatPanel({
               />
             )}
           </div>
-        ))}
+          )
+        )}
         {sending && (
           <div className="max-w-[85%] rounded-2xl bg-base-800 px-4 py-2 text-sm text-neutral-400">
             Thinking…

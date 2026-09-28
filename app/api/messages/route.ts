@@ -1,10 +1,10 @@
-import { createServiceClient } from "@/lib/supabase/server";
+import { getStore } from "@/lib/store";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const supabase = createServiceClient();
+  const store = getStore();
 
   const { searchParams } = new URL(request.url);
   const sessionId = searchParams.get("sessionId");
@@ -12,25 +12,17 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "sessionId required" }, { status: 400 });
   }
 
-  const { data: session } = await supabase
-    .from("chat_sessions")
-    .select("id")
-    .eq("id", sessionId)
-    .single();
-
-  if (!session) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  try {
+    const session = await store.getSession(sessionId);
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+    const messages = await store.listMessages(sessionId);
+    return NextResponse.json({ messages });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to load messages" },
+      { status: 500 }
+    );
   }
-
-  const { data, error } = await supabase
-    .from("chat_messages")
-    .select("id, role, content, created_at")
-    .eq("session_id", sessionId)
-    .order("created_at", { ascending: true });
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ messages: data });
 }
