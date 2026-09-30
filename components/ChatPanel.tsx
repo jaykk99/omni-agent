@@ -81,6 +81,7 @@ export default function ChatPanel({
               </div>
             )}
             {m.screenshot && (
+              // eslint-disable-next-line @next/next/no-img-element -- data-URL screenshot, next/image cannot optimize it
               <img
                 src={m.screenshot}
                 alt="Where the browser ended up"

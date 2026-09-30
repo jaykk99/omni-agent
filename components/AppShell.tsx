@@ -51,6 +51,7 @@ export default function AppShell() {
     } catch {
       // localStorage unavailable — fall back to the default model.
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only initial session load
   }, []);
 
   function updateModel(next: string) {

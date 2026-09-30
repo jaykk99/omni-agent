@@ -122,7 +122,7 @@ export async function POST(request: Request) {
 
   const events: { type: string; detail?: string }[] = [];
 
-  const useKeyless = async (fallbackReason: string | null) => {
+  const answerWithKeyless = async (fallbackReason: string | null) => {
     try {
       const keylessMessages: ChatMessage[] = [
         KEYLESS_SYSTEM_PROMPT,
@@ -149,7 +149,7 @@ export async function POST(request: Request) {
   // KEYLESS-FIRST: no gateway key → skip the tool loop entirely and answer
   // with the free keyless model instead of erroring out.
   if (!isGatewayConfigured()) {
-    return useKeyless(null);
+    return answerWithKeyless(null);
   }
 
   // Real browsing tasks often take several steps (goto → click → read →
@@ -161,7 +161,7 @@ export async function POST(request: Request) {
     } catch (err) {
       // The configured gateway failed — degrade to the keyless fallback
       // rather than showing a dead end. The notice event lets the UI say why.
-      return useKeyless(
+      return answerWithKeyless(
         `Model gateway failed (${err instanceof Error ? err.message : "unknown error"}) — answered with the free keyless model instead.`
       );
     }

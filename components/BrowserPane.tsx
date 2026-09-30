@@ -16,6 +16,7 @@ export default function BrowserPane({
       </div>
       <div className="flex flex-1 items-center justify-center bg-black">
         {screenshotUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- data-URL screenshot, next/image cannot optimize it
           <img
             src={screenshotUrl}
             alt="Current browser view"

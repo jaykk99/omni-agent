@@ -16,8 +16,8 @@ export default function TerminalPane({ entries }: { entries: TerminalEntry[] }) 
       <div className="flex-1 overflow-y-auto bg-black p-4 font-mono text-xs">
         {entries.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-neutral-500">
-            The assistant's terminal output will show up here once it runs a
-            command in this chat's sandbox.
+            The assistant&apos;s terminal output will show up here once it runs a
+            command in this chat&apos;s sandbox.
           </div>
         ) : (
           <div className="space-y-4">
