@@ -22,6 +22,7 @@ export default function AppShell() {
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [browserStatus, setBrowserStatus] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [lastInput, setLastInput] = useState<string | null>(null);
   const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([]);
   const [rightTab, setRightTab] = useState<"browser" | "terminal">("browser");
   const [mobileView, setMobileView] = useState<"chat" | "right">("chat");
@@ -148,6 +149,7 @@ export default function AppShell() {
   async function sendMessage(text: string) {
     if (!activeSessionId) return;
     setSending(true);
+    setLastInput(text);
     setMessages((prev) => [
       ...prev,
       { id: `local-${Date.now()}`, role: "user", content: text },
@@ -228,12 +230,18 @@ export default function AppShell() {
         {
           id: `reply-${Date.now()}`,
           role: "assistant",
-          content: "Couldn't reach the server — check your connection and try again.",
+          content:
+            "Couldn't reach the server — check your connection and try again.",
+          failed: true,
         },
       ]);
     } finally {
       setSending(false);
     }
+  }
+
+  function retryLast() {
+    if (lastInput && !sending) sendMessage(lastInput);
   }
 
   async function lockApp() {
@@ -263,7 +271,15 @@ export default function AppShell() {
                 : "text-neutral-400 hover:bg-base-800"
             }`}
           >
-            <span className="truncate">{s.title || "New chat"}</span>
+            <span className="min-w-0">
+              <span className="block truncate">{s.title || "New chat"}</span>
+              <span className="block truncate text-[11px] text-neutral-500">
+                {new Date(s.created_at).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </span>
+            </span>
             <button
               onClick={(e) => deleteSession(s.id, e)}
               className="ml-2 shrink-0 rounded px-1.5 py-0.5 text-xs text-neutral-500 opacity-0 hover:bg-base-600 hover:text-white group-hover:opacity-100"
@@ -399,7 +415,7 @@ export default function AppShell() {
             mobileView === "chat" ? "flex" : "hidden"
           } w-full flex-col border-r border-base-700 md:flex md:w-1/2`}
         >
-          <ChatPanel messages={messages} onSend={sendMessage} sending={sending} keyless={keyless} />
+          <ChatPanel messages={messages} onSend={sendMessage} sending={sending} onRetry={retryLast} keyless={keyless} />
         </div>
         <div
           className={`${

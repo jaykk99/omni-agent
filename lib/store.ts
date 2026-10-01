@@ -31,6 +31,8 @@ export interface Store {
   getSession(id: string): Promise<SessionRow | null>;
   createSession(title: string): Promise<SessionRow>;
   deleteSession(id: string): Promise<void>;
+  /** Rename a session (used to auto-title chats from their first message). */
+  updateSessionTitle(id: string, title: string): Promise<void>;
   setSandboxId(id: string, sandboxId: string): Promise<void>;
   listMessages(sessionId: string): Promise<MessageRow[]>;
   addMessage(sessionId: string, role: string, content: string): Promise<MessageRow>;
@@ -83,6 +85,13 @@ function createSupabaseStore(): Store {
     },
     async deleteSession(id) {
       const { error } = await client.from("chat_sessions").delete().eq("id", id);
+      if (error) throw new Error(error.message);
+    },
+    async updateSessionTitle(id, title) {
+      const { error } = await client
+        .from("chat_sessions")
+        .update({ title })
+        .eq("id", id);
       if (error) throw new Error(error.message);
     },
     async setSandboxId(id, sandboxId) {
@@ -141,6 +150,10 @@ function createMemoryStore(): Store {
     async deleteSession(id) {
       sessions.delete(id);
       messages.delete(id);
+    },
+    async updateSessionTitle(id, title) {
+      const s = sessions.get(id);
+      if (s) s.title = title;
     },
     async setSandboxId(id, sandboxId) {
       const s = sessions.get(id);

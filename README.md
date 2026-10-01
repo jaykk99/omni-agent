@@ -71,3 +71,13 @@ Vercel.
   "not saved" banner.
 - `APP_PIN` gated the app with no way to opt out — now the gate only
   exists when the var is set.
+
+## PIN gate hardening
+
+- Wrong-PIN attempts are rate-limited per client IP: 10 failures in
+  10 minutes triggers a 15-minute lockout (HTTP 429 with `Retry-After`).
+  The limit is per server instance (in-memory) — fine for a casual gate,
+  not a vault.
+- The gate cookie carries an HMAC digest of the PIN, never the PIN
+  itself. After this change, anyone holding an old raw-PIN cookie is
+  bounced to `/gate` once and re-enters.

@@ -27,20 +27,27 @@ const SYSTEM_PROMPT: ChatMessage = {
     "write/execute code, or otherwise needs a real shell — it's a persistent Linux sandbox that " +
     "stays alive for this chat, so files and installed packages carry over between commands. " +
     "Narrate what you found in plain language rather than dumping raw page or terminal output. " +
-    "If a tool errors, say so plainly instead of guessing.",
+    "If a tool errors, say so plainly instead of guessing. " +
+    "Format longer answers with Markdown: short headings, bullet lists, and " +
+    "fenced code blocks with language tags.",
 };
 
 // Keyless mode: no function-calling model, so the assistant must not claim
-// browser/terminal powers it can't exercise right now. Be upfront about it.
+// browser/terminal powers it can't exercise right now. Be upfront about it,
+// and format answers with Markdown since the UI renders it.
 const KEYLESS_SYSTEM_PROMPT: ChatMessage = {
   role: "system",
   content:
     "You are Omni Agent, a helpful AI assistant. You are running in keyless demo " +
-    "mode: you can hold a normal conversation, answer questions, and explain things, " +
-    "but you cannot browse the web or run terminal commands right now — those tools " +
-    "need a configured model gateway. If the person asks you to do something that " +
-    "needs the browser or terminal, say so plainly instead of pretending you did it. " +
-    "Keep answers concise.",
+    "mode: you can hold a normal conversation, answer questions, explain things, " +
+    "and write or debug code, but you cannot browse the web or run terminal " +
+    "commands right now — those tools need a configured model gateway. If the " +
+    "person asks for something that needs the browser or terminal, say so " +
+    "plainly in one sentence and offer what you CAN do instead (explain, draft, " +
+    "write the code/commands for them to run) — never pretend you did it. " +
+    "Format longer answers with Markdown: short headings, bullet lists, and " +
+    "fenced code blocks with language tags. Keep answers focused and reasonably " +
+    "concise; don't pad.",
 };
 
 const BROWSER_TOOL: ToolDefinition = {
@@ -104,6 +111,19 @@ export async function POST(request: Request) {
   }
 
   await store.addMessage(sessionId, "user", message);
+
+  // Auto-title untitled chats from their first message so the sidebar stays
+  // readable. Best-effort — a failed rename must never break the chat.
+  if (session.title === "New chat" || !session.title) {
+    const title = message.replace(/\s+/g, " ").trim().slice(0, 48);
+    if (title) {
+      try {
+        await store.updateSessionTitle(sessionId, title);
+      } catch {
+        // ignore — the chat itself matters more than its title
+      }
+    }
+  }
 
   const history = await store.listMessages(sessionId);
   const messages: ChatMessage[] = [
