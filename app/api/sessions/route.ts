@@ -52,3 +52,40 @@ export async function DELETE(request: Request) {
     );
   }
 }
+
+/** PATCH /api/sessions { id, title } — rename a chat from the sidebar. */
+export async function PATCH(request: Request) {
+  const store = getStore();
+
+  const body = await request.json().catch(() => ({}));
+  const id = typeof body?.id === "string" ? body.id : "";
+  const title =
+    typeof body?.title === "string" ? body.title.replace(/\s+/g, " ").trim() : "";
+
+  if (!id || !title) {
+    return NextResponse.json(
+      { error: "id and a non-empty title are required" },
+      { status: 400 }
+    );
+  }
+  if (title.length > 120) {
+    return NextResponse.json(
+      { error: "title must be 120 characters or fewer" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const session = await store.getSession(id);
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+    await store.updateSessionTitle(id, title);
+    return NextResponse.json({ ok: true, session: { ...session, title } });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to rename session" },
+      { status: 500 }
+    );
+  }
+}

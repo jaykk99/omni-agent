@@ -242,9 +242,11 @@ export default function AppShell() {
     if (!activeSessionId) return;
     setSending(true);
     setLastInput(text);
+    const localUserId = `local-${Date.now()}`;
+    const localReplyId = `reply-${Date.now()}`;
     setMessages((prev) => [
       ...prev,
-      { id: `local-${Date.now()}`, role: "user", content: text },
+      { id: localUserId, role: "user", content: text },
     ]);
     try {
       // The sandbox browser session has to exist (and its id stored on the
@@ -261,7 +263,13 @@ export default function AppShell() {
       });
       // A platform-level failure (timeout, crash) comes back as an HTML error
       // page, not JSON — surface that instead of silently showing nothing.
-      let data: { reply?: string; error?: string; events?: { type: string; detail?: string }[] };
+      let data: {
+        reply?: string;
+        error?: string;
+        userMessageId?: string;
+        assistantMessageId?: string;
+        events?: { type: string; detail?: string }[];
+      };
       try {
         data = await res.json();
       } catch {
@@ -269,6 +277,16 @@ export default function AppShell() {
           error: `The server didn't respond properly (HTTP ${res.status}). Please try again.`,
         };
       }
+      // The server stored both messages — swap the local placeholder ids for
+      // the real stored ids so per-message actions (delete/edit/regenerate)
+      // can target them.
+      const storedUserId = data.userMessageId ?? localUserId;
+      const storedReplyId = data.assistantMessageId ?? localReplyId;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === localUserId ? { ...m, id: storedUserId } : m
+        )
+      );
       const events = data.events ?? [];
       const latestScreenshot = [...events].reverse().find((e) => e.type === "screenshot");
       const visited = events
@@ -286,7 +304,7 @@ export default function AppShell() {
           content: n.detail as string,
         })),
         {
-          id: `reply-${Date.now()}`,
+          id: storedReplyId,
           role: "assistant",
           content: data.reply ?? data.error ?? "Something went wrong.",
           screenshot: latestScreenshot?.detail,
@@ -339,6 +357,92 @@ export default function AppShell() {
   async function lockApp() {
     await fetch("/api/gate", { method: "DELETE" });
     window.location.href = "/gate";
+  }
+
+  // ---- Per-message actions ------------------------------------------------
+
+  /** True for client-only placeholder ids that were never stored server-side. */
+  function isLocalMessage(id: string) {
+    return (
+      id.startsWith("local-") ||
+      id.startsWith("reply-") ||
+      id.startsWith("notice-")
+    );
+  }
+
+  async function deleteChatMessage(id: string) {
+    if (!activeSessionId || sending) return;
+    if (isLocalMessage(id)) {
+      // Never stored (e.g. a failed send) — just drop it from the view.
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      return;
+    }
+    if (!window.confirm("Delete this message?")) return;
+    const res = await fetch(
+      `/api/messages?sessionId=${activeSessionId}&messageId=${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    );
+    if (res.ok) setMessages((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  /** Rewind the stored chat to one of the user's messages, then resend the
+   *  (possibly edited) text as a fresh message. */
+  async function rewindAndResend(fromId: string, text: string) {
+    if (!activeSessionId || sending || !text.trim()) return;
+    if (!isLocalMessage(fromId)) {
+      const res = await fetch(
+        `/api/messages?sessionId=${activeSessionId}&truncateFrom=${encodeURIComponent(fromId)}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) return;
+    }
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === fromId);
+      return idx === -1 ? prev : prev.slice(0, idx);
+    });
+    sendMessage(text.trim());
+  }
+
+  /** Re-run the assistant's answer to the latest user message. */
+  function regenerateReply() {
+    if (sending) return;
+    let lastUser: Message | null = null;
+    for (const m of messages) {
+      if (m.role === "user") lastUser = m;
+    }
+    if (lastUser) rewindAndResend(lastUser.id, lastUser.content);
+  }
+
+  // ---- Chat rename ---------------------------------------------------------
+
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
+
+  function startRename(s: SessionSummary, e: React.MouseEvent) {
+    e.stopPropagation();
+    setRenamingId(s.id);
+    setRenameText(s.title || "");
+  }
+
+  async function saveRename(id: string) {
+    const title = renameText.replace(/\s+/g, " ").trim();
+    setRenamingId(null);
+    if (!title) return;
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, title }),
+      });
+      if (!res.ok) {
+        // Roll back the optimistic title on failure.
+        const fresh = await (await fetch("/api/sessions")).json();
+        if (fresh.sessions) setSessions(fresh.sessions);
+      }
+    } catch {
+      // Offline — the optimistic title stays for this view only.
+    }
   }
 
   const sidebarContent = (
@@ -427,16 +531,43 @@ export default function AppShell() {
                 : "text-neutral-400 hover:bg-base-800"
             }`}
           >
-            <span className="min-w-0">
-              <span className="block truncate">{s.title || "New chat"}</span>
-              <span className="block truncate text-[11px] text-neutral-500">
-                {new Date(s.created_at).toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })}
-              </span>
+            <span className="min-w-0 flex-1">
+              {renamingId === s.id ? (
+                <input
+                  autoFocus
+                  value={renameText}
+                  onChange={(e) => setRenameText(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveRename(s.id);
+                    else if (e.key === "Escape") setRenamingId(null);
+                  }}
+                  onBlur={() => saveRename(s.id)}
+                  aria-label="Rename chat"
+                  maxLength={120}
+                  className="w-full rounded border border-accent-500 bg-base-800 px-1.5 py-0.5 text-sm text-white outline-none"
+                />
+              ) : (
+                <>
+                  <span className="block truncate">{s.title || "New chat"}</span>
+                  <span className="block truncate text-[11px] text-neutral-500">
+                    {new Date(s.created_at).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                </>
+              )}
             </span>
             <span className="ml-2 flex shrink-0 items-center">
+              <button
+                onClick={(e) => startRename(s, e)}
+                className="rounded px-1.5 py-0.5 text-xs text-neutral-500 opacity-0 hover:bg-base-600 hover:text-white group-hover:opacity-100"
+                aria-label="Rename chat"
+                title="Rename chat"
+              >
+                ✎
+              </button>
               <button
                 onClick={(e) => exportSession(s.id, e)}
                 className="rounded px-1.5 py-0.5 text-xs text-neutral-500 opacity-0 hover:bg-base-600 hover:text-white group-hover:opacity-100"
@@ -581,7 +712,17 @@ export default function AppShell() {
             mobileView === "chat" ? "flex" : "hidden"
           } w-full flex-col border-r border-base-700 md:flex md:w-1/2`}
         >
-          <ChatPanel messages={messages} onSend={sendMessage} sending={sending} onRetry={retryLast} keyless={keyless} highlightId={highlightId} />
+          <ChatPanel
+            messages={messages}
+            onSend={sendMessage}
+            sending={sending}
+            onRetry={retryLast}
+            keyless={keyless}
+            highlightId={highlightId}
+            onDeleteMessage={deleteChatMessage}
+            onEditResend={rewindAndResend}
+            onRegenerate={regenerateReply}
+          />
         </div>
         <div
           className={`${
@@ -618,7 +759,10 @@ export default function AppShell() {
                 status={browserStatus}
               />
             ) : (
-              <TerminalPane entries={terminalEntries} />
+              <TerminalPane
+                entries={terminalEntries}
+                onClear={() => setTerminalEntries([])}
+              />
             )}
           </div>
         </div>

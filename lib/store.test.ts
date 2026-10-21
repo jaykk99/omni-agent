@@ -85,6 +85,69 @@ describe("searchMessages", () => {
   });
 });
 
+describe("deleteMessage and truncateMessages", () => {
+  it("deletes exactly one message", async () => {
+    const store = getStore();
+    const session = await store.createSession("Delete one msg zxqv");
+    const a = await store.addMessage(session.id, "user", "keep me zxqv");
+    const b = await store.addMessage(session.id, "assistant", "drop me zxqv");
+    const c = await store.addMessage(session.id, "user", "keep me too zxqv");
+
+    await store.deleteMessage(session.id, b.id);
+    const rest = await store.listMessages(session.id);
+    expect(rest.map((m) => m.id)).toEqual([a.id, c.id]);
+  });
+
+  it("ignores a delete for a message in a different session", async () => {
+    const store = getStore();
+    const s1 = await store.createSession("Scope s1 zxqv");
+    const s2 = await store.createSession("Scope s2 zxqv");
+    const m = await store.addMessage(s1.id, "user", "s1 message zxqv");
+
+    await store.deleteMessage(s2.id, m.id);
+    expect(await store.listMessages(s1.id)).toHaveLength(1);
+  });
+
+  it("truncates a message and everything after it", async () => {
+    const store = getStore();
+    const session = await store.createSession("Truncate zxqv");
+    const a = await store.addMessage(session.id, "user", "first zxqv");
+    const b = await store.addMessage(session.id, "assistant", "second zxqv");
+    await store.addMessage(session.id, "user", "third zxqv");
+    await store.addMessage(session.id, "assistant", "fourth zxqv");
+
+    await store.truncateMessages(session.id, b.id);
+    const rest = await store.listMessages(session.id);
+    expect(rest.map((m) => m.id)).toEqual([a.id]);
+  });
+
+  it("truncating from the first message empties the chat", async () => {
+    const store = getStore();
+    const session = await store.createSession("Truncate all zxqv");
+    const a = await store.addMessage(session.id, "user", "only zxqv");
+    await store.addMessage(session.id, "assistant", "more zxqv");
+
+    await store.truncateMessages(session.id, a.id);
+    expect(await store.listMessages(session.id)).toHaveLength(0);
+  });
+
+  it("throws Message not found for an unknown truncate anchor", async () => {
+    const store = getStore();
+    const session = await store.createSession("Truncate missing zxqv");
+    await expect(
+      store.truncateMessages(session.id, "no-such-id-zxqv")
+    ).rejects.toThrow("Message not found");
+  });
+
+  it("deleting a missing message is a no-op", async () => {
+    const store = getStore();
+    const session = await store.createSession("Delete missing zxqv");
+    await store.addMessage(session.id, "user", "stays zxqv");
+    await store.deleteMessage(session.id, "no-such-id-zxqv");
+    expect(await store.listMessages(session.id)).toHaveLength(1);
+  });
+});
+
 describe("makeSnippet", () => {
   it("adds ellipses around a mid-text match", () => {
     const content = "a".repeat(100) + " TARGET " + "b".repeat(100);
