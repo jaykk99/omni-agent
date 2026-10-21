@@ -97,6 +97,22 @@ This is also the honest answer to the in-memory caveat above: without
 Supabase, chats are transient, but you can export anything worth keeping
 before the instance recycles.
 
+## Chat management
+
+Chats are editable, not append-only:
+
+- **Rename**: the ✎ button on any chat in the sidebar renames it inline
+  (`PATCH /api/sessions`), Enter saves, Esc cancels.
+- **Edit & resend**: hover any of your messages, hit ✎ Edit, change the
+  text, and "Save & resend" rewinds the stored chat to that message and
+  sends the new text as a fresh turn.
+- **Regenerate**: hover the latest assistant reply and hit ↻ to re-run
+  the answer to your last message.
+- **Delete message**: hover any message and hit Delete
+  (`DELETE /api/messages?sessionId=…&messageId=…`); the server also
+  supports `&truncateFrom=…` to delete a message and everything after
+  it — that's what edit-and-resend and regenerate use under the hood.
+
 ## Message search
 
 The sidebar search box searches across **all** chats
@@ -107,6 +123,10 @@ Supabase `ilike` when configured, plain filtering in memory otherwise.
 
 ## Tests
 
-`npm test` runs the vitest suite (`lib/*.test.ts`): PIN rate-limit
-windows/lockouts/re-lock, HMAC gate-token properties, and the
-in-memory store (round-trips, import, search, snippets).
+`npm test` runs the vitest suite (`lib/*.test.ts` and
+`app/api/**/*.test.ts`): PIN rate-limit windows/lockouts/re-lock, HMAC
+gate-token properties, the in-memory store (round-trips, import, search,
+snippets, message delete/truncate), the keyless chat path (system/tool
+message folding, POST retries, GET fallback, honest failure), and the
+messages/sessions route handlers (delete, truncate, rename, validation).
+53 tests, all green.

@@ -74,6 +74,9 @@ export default function ChatPanel({
   onRetry,
   keyless = false,
   highlightId = null,
+  onDeleteMessage,
+  onEditResend,
+  onRegenerate,
 }: {
   messages: Message[];
   onSend: (text: string) => void;
@@ -85,15 +88,29 @@ export default function ChatPanel({
   keyless?: boolean;
   /** Message id to scroll to and flash (from search results). */
   highlightId?: string | null;
+  /** Delete a single stored message (user or assistant). */
+  onDeleteMessage?: (messageId: string) => void;
+  /** User edited one of their messages: rewind the chat to it and resend. */
+  onEditResend?: (messageId: string, newText: string) => void;
+  /** Re-run the assistant's answer to the latest user message. */
+  onRegenerate?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const msgRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const suggestions = keyless ? KEYLESS_SUGGESTIONS : GATEWAY_SUGGESTIONS;
+
+  // The newest non-failed assistant message gets the Regenerate button.
+  let lastAssistantId: string | null = null;
+  for (const m of messages) {
+    if (m.role === "assistant" && !m.failed) lastAssistantId = m.id;
+  }
 
   // Keep the view pinned to the newest message while the user is at (or near)
   // the bottom; leave them alone once they scroll up to read history.
@@ -222,7 +239,45 @@ export default function ChatPanel({
               )}
             >
               {m.role === "user" ? (
-                <div className="whitespace-pre-wrap">{m.content}</div>
+                editingId === m.id ? (
+                  <div>
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      rows={3}
+                      autoFocus
+                      className="w-full resize-y rounded-lg bg-base-900/60 px-3 py-2 text-sm text-white outline-none placeholder:text-neutral-500 focus:ring-1 focus:ring-white/40"
+                    />
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(null);
+                          setEditText("");
+                        }}
+                        className="rounded-md px-2.5 py-1 text-xs font-medium text-white/80 hover:bg-white/10"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!editText.trim() || sending}
+                        onClick={() => {
+                          if (editText.trim() && !sending) {
+                            onEditResend?.(m.id, editText.trim());
+                            setEditingId(null);
+                            setEditText("");
+                          }
+                        }}
+                        className="rounded-md bg-white px-2.5 py-1 text-xs font-semibold text-accent-600 hover:bg-neutral-100 disabled:opacity-50"
+                      >
+                        Save &amp; resend
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="whitespace-pre-wrap">{m.content}</div>
+                )
               ) : (
                 <Markdown text={m.content} />
               )}
@@ -261,28 +316,91 @@ export default function ChatPanel({
                   ↻ Retry
                 </button>
               )}
-              {/* Footer row: timestamp + copy button (assistant only). */}
+              {/* Footer row: message actions + timestamp. Actions appear on
+               *  hover (always visible when focused) so the thread stays
+               *  readable; they only render when the parent wired a handler. */}
               <div
                 className={clsx(
                   "mt-1.5 flex items-center gap-2 text-[10px] text-neutral-500",
-                  m.role === "user" ? "justify-end" : "justify-between"
+                  m.role === "user" ? "justify-between" : "justify-between"
                 )}
               >
+                <span className="flex items-center gap-1">
+                  {m.role === "user" && editingId !== m.id && (
+                    <>
+                      {onEditResend && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingId(m.id);
+                            setEditText(m.content);
+                          }}
+                          aria-label="Edit and resend message"
+                          title="Edit and resend"
+                          disabled={sending}
+                          className="rounded px-1.5 py-0.5 opacity-0 transition hover:bg-base-700 hover:text-white focus:opacity-100 group-hover/msg:opacity-100 disabled:opacity-0"
+                        >
+                          ✎ Edit
+                        </button>
+                      )}
+                      {onDeleteMessage && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteMessage(m.id)}
+                          aria-label="Delete message"
+                          title="Delete message"
+                          disabled={sending}
+                          className="rounded px-1.5 py-0.5 opacity-0 transition hover:bg-base-700 hover:text-white focus:opacity-100 group-hover/msg:opacity-100 disabled:opacity-0"
+                        >
+                          🗑 Delete
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {m.role !== "user" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => copyMessage(m)}
+                        aria-label={copiedId === m.id ? "Copied" : "Copy message"}
+                        title={copiedId === m.id ? "Copied" : "Copy message"}
+                        className="rounded px-1.5 py-0.5 opacity-0 transition hover:bg-base-700 hover:text-white focus:opacity-100 group-hover/msg:opacity-100"
+                      >
+                        {copiedId === m.id ? "✓ Copied" : "⧉ Copy"}
+                      </button>
+                      {onRegenerate &&
+                        m.id === lastAssistantId &&
+                        !m.failed && (
+                          <button
+                            type="button"
+                            onClick={onRegenerate}
+                            aria-label="Regenerate response"
+                            title="Regenerate response"
+                            disabled={sending}
+                            className="rounded px-1.5 py-0.5 opacity-0 transition hover:bg-base-700 hover:text-white focus:opacity-100 group-hover/msg:opacity-100 disabled:opacity-0"
+                          >
+                            ↻ Regenerate
+                          </button>
+                        )}
+                      {onDeleteMessage && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteMessage(m.id)}
+                          aria-label="Delete message"
+                          title="Delete message"
+                          disabled={sending}
+                          className="rounded px-1.5 py-0.5 opacity-0 transition hover:bg-base-700 hover:text-white focus:opacity-100 group-hover/msg:opacity-100 disabled:opacity-0"
+                        >
+                          🗑
+                        </button>
+                      )}
+                    </>
+                  )}
+                </span>
                 {m.createdAt && (
                   <span title={new Date(m.createdAt).toLocaleString()}>
                     {relativeTime(m.createdAt)}
                   </span>
-                )}
-                {m.role !== "user" && (
-                  <button
-                    type="button"
-                    onClick={() => copyMessage(m)}
-                    aria-label={copiedId === m.id ? "Copied" : "Copy message"}
-                    title={copiedId === m.id ? "Copied" : "Copy message"}
-                    className="rounded px-1.5 py-0.5 text-neutral-500 opacity-0 transition hover:bg-base-700 hover:text-white focus:opacity-100 group-hover/msg:opacity-100"
-                  >
-                    {copiedId === m.id ? "✓ Copied" : "⧉ Copy"}
-                  </button>
                 )}
               </div>
             </div>

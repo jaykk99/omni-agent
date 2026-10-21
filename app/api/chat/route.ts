@@ -110,7 +110,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  await store.addMessage(sessionId, "user", message);
+  // The client needs the real stored id of the user message (and later the
+  // assistant reply) so per-message actions — delete, edit-and-resend,
+  // regenerate — can target them. Locally-rendered messages get their ids
+  // swapped for these once the response lands.
+  const userRow = await store.addMessage(sessionId, "user", message);
+  const userMessageId = userRow.id;
 
   // Auto-title untitled chats from their first message so the sidebar stays
   // readable. Best-effort — a failed rename must never break the chat.
@@ -152,17 +157,27 @@ export async function POST(request: Request) {
         })),
       ];
       const reply = await keylessChat(keylessMessages);
-      await store.addMessage(sessionId, "assistant", reply);
+      const assistantRow = await store.addMessage(sessionId, "assistant", reply);
       if (fallbackReason) events.push({ type: "notice", detail: fallbackReason });
-      return NextResponse.json({ reply, events });
+      return NextResponse.json({
+        reply,
+        events,
+        userMessageId,
+        assistantMessageId: assistantRow.id,
+      });
     } catch (err) {
       const reply =
         "I couldn't reach any chat backend just now — the configured model " +
         "gateway and the free keyless fallback both failed. " +
         (err instanceof Error ? `(${err.message}) ` : "") +
         "Try again in a moment.";
-      await store.addMessage(sessionId, "assistant", reply);
-      return NextResponse.json({ reply, events });
+      const assistantRow = await store.addMessage(sessionId, "assistant", reply);
+      return NextResponse.json({
+        reply,
+        events,
+        userMessageId,
+        assistantMessageId: assistantRow.id,
+      });
     }
   };
 
@@ -191,8 +206,13 @@ export async function POST(request: Request) {
 
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
       const finalText = assistantMessage.content ?? "";
-      await store.addMessage(sessionId, "assistant", finalText);
-      return NextResponse.json({ reply: finalText, events });
+      const assistantRow = await store.addMessage(sessionId, "assistant", finalText);
+      return NextResponse.json({
+        reply: finalText,
+        events,
+        userMessageId,
+        assistantMessageId: assistantRow.id,
+      });
     }
 
     for (const call of assistantMessage.tool_calls) {
@@ -285,6 +305,11 @@ export async function POST(request: Request) {
 
   const fallback =
     "I took several browser steps but couldn't wrap up cleanly — try rephrasing or asking again.";
-  await store.addMessage(sessionId, "assistant", fallback);
-  return NextResponse.json({ reply: fallback, events });
+  const assistantRow = await store.addMessage(sessionId, "assistant", fallback);
+  return NextResponse.json({
+    reply: fallback,
+    events,
+    userMessageId,
+    assistantMessageId: assistantRow.id,
+  });
 }

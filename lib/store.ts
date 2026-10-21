@@ -54,6 +54,11 @@ export interface Store {
   setSandboxId(id: string, sandboxId: string): Promise<void>;
   listMessages(sessionId: string): Promise<MessageRow[]>;
   addMessage(sessionId: string, role: string, content: string): Promise<MessageRow>;
+  /** Delete one message by id. */
+  deleteMessage(sessionId: string, messageId: string): Promise<void>;
+  /** Delete a message and every message after it (powers edit-and-resend
+   *  and regenerate: rewind the chat to a point, then continue from there). */
+  truncateMessages(sessionId: string, fromMessageId: string): Promise<void>;
   /** Create a session and bulk-insert messages from an export payload. */
   importSession(title: string, messages: { role: string; content: string }[]): Promise<SessionRow>;
   /** Case-insensitive substring search over all message content. */
@@ -140,6 +145,33 @@ function createSupabaseStore(): Store {
         .single();
       if (error) throw new Error(error.message);
       return data as MessageRow;
+    },
+    async deleteMessage(sessionId, messageId) {
+      const { error } = await client
+        .from("chat_messages")
+        .delete()
+        .eq("id", messageId)
+        .eq("session_id", sessionId);
+      if (error) throw new Error(error.message);
+    },
+    async truncateMessages(sessionId, fromMessageId) {
+      // Find the cutoff's timestamp, then delete it and everything newer.
+      // (chat_messages has no sequence column; created_at is the order.)
+      const { data: anchor, error: anchorError } = await client
+        .from("chat_messages")
+        .select("created_at")
+        .eq("id", fromMessageId)
+        .eq("session_id", sessionId)
+        .single();
+      if (anchorError || !anchor) {
+        throw new Error("Message not found");
+      }
+      const { error } = await client
+        .from("chat_messages")
+        .delete()
+        .eq("session_id", sessionId)
+        .gte("created_at", anchor.created_at);
+      if (error) throw new Error(error.message);
     },
     async importSession(title, messages) {
       const { data: session, error: sessionError } = await client
@@ -252,6 +284,22 @@ function createMemoryStore(): Store {
         await this.addMessage(session.id, m.role, m.content);
       }
       return session;
+    },
+    async deleteMessage(sessionId, messageId) {
+      const list = messages.get(sessionId);
+      if (list) {
+        messages.set(
+          sessionId,
+          list.filter((m) => m.id !== messageId)
+        );
+      }
+    },
+    async truncateMessages(sessionId, fromMessageId) {
+      const list = messages.get(sessionId);
+      if (!list) return;
+      const idx = list.findIndex((m) => m.id === fromMessageId);
+      if (idx === -1) throw new Error("Message not found");
+      messages.set(sessionId, list.slice(0, idx));
     },
     async searchMessages(query, limit) {
       const needle = query.toLowerCase();
