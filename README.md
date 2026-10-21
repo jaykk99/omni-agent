@@ -81,3 +81,32 @@ Vercel.
 - The gate cookie carries an HMAC digest of the PIN, never the PIN
   itself. After this change, anyone holding an old raw-PIN cookie is
   bounced to `/gate` once and re-enters.
+
+## Chat export / import
+
+Every chat can leave the app as a portable JSON file and come back:
+
+- **Export**: the ⤓ button on any chat in the sidebar downloads it
+  (`GET /api/sessions/export?id=...`) — title, all messages, timestamps.
+- **Import**: the ⇪ Import button reads an exported JSON file and
+  recreates the chat (`POST /api/sessions/import`). Payloads are
+  validated: max 2000 messages, unknown/invalid rows skipped, content
+  capped so a hand-edited file can't blow up the database.
+
+This is also the honest answer to the in-memory caveat above: without
+Supabase, chats are transient, but you can export anything worth keeping
+before the instance recycles.
+
+## Message search
+
+The sidebar search box searches across **all** chats
+(`GET /api/search?q=...`), case-insensitive, newest matches first, with
+a snippet around each match. Clicking a result opens that chat and
+scrolls the message into view with a highlight flash. Backed by
+Supabase `ilike` when configured, plain filtering in memory otherwise.
+
+## Tests
+
+`npm test` runs the vitest suite (`lib/*.test.ts`): PIN rate-limit
+windows/lockouts/re-lock, HMAC gate-token properties, and the
+in-memory store (round-trips, import, search, snippets).
