@@ -316,6 +316,19 @@ export default function AppShell() {
         setBrowserStatus(null);
       }
 
+      // The server auto-titles untitled chats from the first message; mirror
+      // it in the sidebar (same rule) so the name shows without a reload.
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === activeSessionId && (!s.title || s.title === "New chat")
+            ? {
+                ...s,
+                title: text.replace(/\s+/g, " ").trim().slice(0, 48) || s.title,
+              }
+            : s
+        )
+      );
+
       const newTerminalEntries: TerminalEntry[] = events
         .filter((e) => e.type === "terminal")
         .map((e) => {
