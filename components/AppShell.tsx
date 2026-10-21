@@ -12,6 +12,15 @@ type SessionSummary = {
   created_at: string;
 };
 
+type SearchHit = {
+  session_id: string;
+  session_title: string;
+  message_id: string;
+  role: string;
+  snippet: string;
+  created_at: string;
+};
+
 const MODEL_STORAGE_KEY = "omni_model";
 
 export default function AppShell() {
@@ -29,6 +38,13 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [model, setModel] = useState(MODEL_OPTIONS[0].id);
+  // Cross-chat message search.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   // What the server can actually do right now (drives the keyless-mode
   // banner and the chat empty state — never a silent degradation).
   const [status, setStatus] = useState<{
@@ -91,16 +107,26 @@ export default function AppShell() {
     }
   }
 
-  async function selectSession(id: string) {
+  async function selectSession(id: string, highlightMessageId?: string) {
     setActiveSessionId(id);
     setLiveViewUrl(null);
     setScreenshotUrl(null);
     setBrowserStatus(null);
     setTerminalEntries([]);
     setMobileView("chat");
+    setHighlightId(highlightMessageId ?? null);
     const res = await fetch(`/api/messages?sessionId=${id}`);
     const data = await res.json();
-    setMessages(data.messages ?? []);
+    setMessages(
+      (data.messages ?? []).map(
+        (m: { id: string; role: string; content: string; created_at?: string }) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          createdAt: m.created_at,
+        })
+      )
+    );
     ensureBrowser(id);
     setSidebarOpen(false);
   }
@@ -122,6 +148,72 @@ export default function AppShell() {
         createSession();
       }
     }
+  }
+
+  // Debounced cross-chat search — fires 300ms after the user stops typing.
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setSearchHits(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        setSearchHits(res.ok ? data.hits ?? [] : []);
+      } catch {
+        setSearchHits([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  function exportSession(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    // The export route returns a Content-Disposition download; assigning
+    // location keeps it a simple one-liner without blob juggling.
+    const a = document.createElement("a");
+    a.href = `/api/sessions/export?id=${encodeURIComponent(id)}`;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  async function importSessionFile(file: File) {
+    setImportError(null);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(await file.text());
+    } catch {
+      setImportError("That file isn't valid JSON.");
+      return;
+    }
+    const res = await fetch("/api/sessions/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.session) {
+      setImportError(data.error ?? "Import failed.");
+      return;
+    }
+    const imported = data.session as SessionSummary;
+    setSessions((prev) => [imported, ...prev]);
+    setSearchQuery("");
+    selectSession(imported.id);
+  }
+
+  function jumpToHit(hit: SearchHit) {
+    setSearchQuery("");
+    setSearchHits(null);
+    selectSession(hit.session_id, hit.message_id);
   }
 
   function ensureBrowser(id: string) {
@@ -253,13 +345,77 @@ export default function AppShell() {
     <>
       <div className="flex items-center justify-between p-4">
         <span className="text-sm font-semibold">Omni Agent</span>
-        <button
-          onClick={createSession}
-          className="rounded-md bg-accent-500 px-2 py-1 text-xs font-medium hover:bg-accent-400"
-        >
-          + New
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => importInputRef.current?.click()}
+            className="rounded-md px-2 py-1 text-xs font-medium text-neutral-300 hover:bg-base-800 hover:text-white"
+            title="Import a chat from an exported JSON file"
+          >
+            ⇪ Import
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) importSessionFile(f);
+              e.target.value = "";
+            }}
+          />
+          <button
+            onClick={createSession}
+            className="rounded-md bg-accent-500 px-2 py-1 text-xs font-medium hover:bg-accent-400"
+          >
+            + New
+          </button>
+        </div>
       </div>
+      {importError && (
+        <p className="mx-4 mb-2 rounded-md border border-red-800/60 bg-red-950/50 px-2 py-1 text-xs text-red-300">
+          {importError}
+        </p>
+      )}
+      <div className="px-2 pb-2">
+        <input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search chats…"
+          aria-label="Search messages across chats"
+          className="w-full rounded-lg border border-base-700 bg-base-800 px-3 py-1.5 text-sm text-white outline-none placeholder:text-neutral-500 focus:border-accent-500"
+        />
+      </div>
+      {searchHits !== null && (
+        <div className="mx-2 mb-2 max-h-64 overflow-y-auto rounded-lg border border-base-700 bg-base-800/60">
+          {searching ? (
+            <p className="px-3 py-2 text-xs text-neutral-400">Searching…</p>
+          ) : searchHits.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-neutral-400">
+              No messages match “{searchQuery.trim()}”.
+            </p>
+          ) : (
+            searchHits.map((h) => (
+              <button
+                key={h.message_id}
+                type="button"
+                onClick={() => jumpToHit(h)}
+                className="block w-full border-b border-base-700/60 px-3 py-2 text-left last:border-0 hover:bg-base-700/60"
+              >
+                <span className="block truncate text-xs font-medium text-white">
+                  {h.session_title || "New chat"}
+                  <span className="ml-1.5 font-normal text-neutral-500">
+                    {h.role === "user" ? "you" : "assistant"}
+                  </span>
+                </span>
+                <span className="block truncate text-xs text-neutral-400">
+                  {h.snippet}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
       <div className="flex-1 space-y-1 overflow-y-auto px-2">
         {sessions.map((s) => (
           <div
@@ -280,14 +436,24 @@ export default function AppShell() {
                 })}
               </span>
             </span>
-            <button
-              onClick={(e) => deleteSession(s.id, e)}
-              className="ml-2 shrink-0 rounded px-1.5 py-0.5 text-xs text-neutral-500 opacity-0 hover:bg-base-600 hover:text-white group-hover:opacity-100"
-              aria-label="Delete chat"
-              title="Delete chat"
-            >
-              ✕
-            </button>
+            <span className="ml-2 flex shrink-0 items-center">
+              <button
+                onClick={(e) => exportSession(s.id, e)}
+                className="rounded px-1.5 py-0.5 text-xs text-neutral-500 opacity-0 hover:bg-base-600 hover:text-white group-hover:opacity-100"
+                aria-label="Export chat as JSON"
+                title="Export chat as JSON"
+              >
+                ⤓
+              </button>
+              <button
+                onClick={(e) => deleteSession(s.id, e)}
+                className="rounded px-1.5 py-0.5 text-xs text-neutral-500 opacity-0 hover:bg-base-600 hover:text-white group-hover:opacity-100"
+                aria-label="Delete chat"
+                title="Delete chat"
+              >
+                ✕
+              </button>
+            </span>
           </div>
         ))}
       </div>
@@ -415,7 +581,7 @@ export default function AppShell() {
             mobileView === "chat" ? "flex" : "hidden"
           } w-full flex-col border-r border-base-700 md:flex md:w-1/2`}
         >
-          <ChatPanel messages={messages} onSend={sendMessage} sending={sending} onRetry={retryLast} keyless={keyless} />
+          <ChatPanel messages={messages} onSend={sendMessage} sending={sending} onRetry={retryLast} keyless={keyless} highlightId={highlightId} />
         </div>
         <div
           className={`${

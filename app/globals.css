@@ -207,3 +207,12 @@ body {
 .md-code-pre code {
   white-space: pre;
 }
+
+/* Flash outline when jumping to a message from search results. */
+@keyframes msg-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+  25%, 75% { box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.55); }
+}
+.msg-flash {
+  animation: msg-flash 1.6s ease-in-out;
+}

@@ -8,6 +8,9 @@ export type Message = {
   id: string;
   role: string;
   content: string;
+  /** ISO timestamp when the message was stored — shown as a relative
+   *  tooltip on hover. Locally-sent messages don't have one yet. */
+  createdAt?: string;
   /** Screenshot of where the browser ended up for this reply, if it browsed.
    *  Shown inline so navigation is visible even on mobile, where the
    *  browser pane sits behind its own tab. */
@@ -32,6 +35,25 @@ const GATEWAY_SUGGESTIONS = [
   "Write and run a quick Python script",
 ];
 
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffMs = Date.now() - then;
+  if (diffMs < 0) return "just now";
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 function TypingIndicator() {
   return (
     <div
@@ -51,6 +73,7 @@ export default function ChatPanel({
   sending,
   onRetry,
   keyless = false,
+  highlightId = null,
 }: {
   messages: Message[];
   onSend: (text: string) => void;
@@ -60,11 +83,15 @@ export default function ChatPanel({
   /** True when no model gateway key is configured — the empty state must not
    *  promise browsing/terminal powers that aren't available in this mode. */
   keyless?: boolean;
+  /** Message id to scroll to and flash (from search results). */
+  highlightId?: string | null;
 }) {
   const [input, setInput] = useState("");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const msgRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const suggestions = keyless ? KEYLESS_SUGGESTIONS : GATEWAY_SUGGESTIONS;
 
@@ -76,11 +103,34 @@ export default function ChatPanel({
     }
   }, [messages, sending]);
 
+  // Jump to a message chosen from search results and flash it.
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = msgRefs.current.get(highlightId);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("msg-flash");
+      const t = setTimeout(() => el.classList.remove("msg-flash"), 1600);
+      return () => clearTimeout(t);
+    }
+  }, [highlightId, messages]);
+
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
     stickRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+
+  async function copyMessage(m: Message) {
+    try {
+      await navigator.clipboard.writeText(m.content);
+      setCopiedId(m.id);
+      setTimeout(() => setCopiedId((cur) => (cur === m.id ? null : cur)), 1500);
+    } catch {
+      // Clipboard unavailable (non-secure context) — fail silently; the
+      // user can still select the text manually.
+    }
   }
 
   function autosize() {
@@ -160,8 +210,12 @@ export default function ChatPanel({
           ) : (
             <div
               key={m.id}
+              ref={(el) => {
+                if (el) msgRefs.current.set(m.id, el);
+                else msgRefs.current.delete(m.id);
+              }}
               className={clsx(
-                "msg-in max-w-[88%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed sm:max-w-[85%]",
+                "msg-in group/msg relative max-w-[88%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed sm:max-w-[85%]",
                 m.role === "user"
                   ? "ml-auto rounded-br-md bg-accent-500 text-white shadow-md shadow-accent-500/20"
                   : "rounded-bl-md bg-base-800 text-neutral-100"
@@ -207,6 +261,30 @@ export default function ChatPanel({
                   ↻ Retry
                 </button>
               )}
+              {/* Footer row: timestamp + copy button (assistant only). */}
+              <div
+                className={clsx(
+                  "mt-1.5 flex items-center gap-2 text-[10px] text-neutral-500",
+                  m.role === "user" ? "justify-end" : "justify-between"
+                )}
+              >
+                {m.createdAt && (
+                  <span title={new Date(m.createdAt).toLocaleString()}>
+                    {relativeTime(m.createdAt)}
+                  </span>
+                )}
+                {m.role !== "user" && (
+                  <button
+                    type="button"
+                    onClick={() => copyMessage(m)}
+                    aria-label={copiedId === m.id ? "Copied" : "Copy message"}
+                    title={copiedId === m.id ? "Copied" : "Copy message"}
+                    className="rounded px-1.5 py-0.5 text-neutral-500 opacity-0 transition hover:bg-base-700 hover:text-white focus:opacity-100 group-hover/msg:opacity-100"
+                  >
+                    {copiedId === m.id ? "✓ Copied" : "⧉ Copy"}
+                  </button>
+                )}
+              </div>
             </div>
           )
         )}

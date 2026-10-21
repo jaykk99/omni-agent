@@ -26,6 +26,24 @@ export type MessageRow = {
   created_at: string;
 };
 
+/** A portable export/import payload: one chat session with its messages. */
+export type SessionExport = {
+  version: 1;
+  exported_at: string;
+  title: string;
+  messages: { role: string; content: string; created_at?: string }[];
+};
+
+/** One message match for cross-chat search. */
+export type SearchHit = {
+  session_id: string;
+  session_title: string;
+  message_id: string;
+  role: string;
+  snippet: string;
+  created_at: string;
+};
+
 export interface Store {
   listSessions(): Promise<SessionRow[]>;
   getSession(id: string): Promise<SessionRow | null>;
@@ -36,6 +54,10 @@ export interface Store {
   setSandboxId(id: string, sandboxId: string): Promise<void>;
   listMessages(sessionId: string): Promise<MessageRow[]>;
   addMessage(sessionId: string, role: string, content: string): Promise<MessageRow>;
+  /** Create a session and bulk-insert messages from an export payload. */
+  importSession(title: string, messages: { role: string; content: string }[]): Promise<SessionRow>;
+  /** Case-insensitive substring search over all message content. */
+  searchMessages(query: string, limit: number): Promise<SearchHit[]>;
 }
 
 export function isDatabaseConfigured(): boolean {
@@ -119,6 +141,55 @@ function createSupabaseStore(): Store {
       if (error) throw new Error(error.message);
       return data as MessageRow;
     },
+    async importSession(title, messages) {
+      const { data: session, error: sessionError } = await client
+        .from("chat_sessions")
+        .insert({ title })
+        .select("id, title, created_at, vercel_sandbox_id")
+        .single();
+      if (sessionError) throw new Error(sessionError.message);
+      if (messages.length > 0) {
+        const { error: msgError } = await client.from("chat_messages").insert(
+          messages.map((m) => ({
+            session_id: session.id,
+            role: m.role,
+            content: m.content,
+          }))
+        );
+        if (msgError) throw new Error(msgError.message);
+      }
+      return session as SessionRow;
+    },
+    async searchMessages(query, limit) {
+      const pattern = `%${query.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
+      const { data, error } = await client
+        .from("chat_messages")
+        .select("id, session_id, role, content, created_at")
+        .ilike("content", pattern)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as MessageRow[];
+      const titles = new Map<string, string>();
+      if (rows.length > 0) {
+        const ids = [...new Set(rows.map((r) => r.session_id))];
+        const { data: sessionsData } = await client
+          .from("chat_sessions")
+          .select("id, title")
+          .in("id", ids);
+        for (const s of (sessionsData ?? []) as { id: string; title: string }[]) {
+          titles.set(s.id, s.title);
+        }
+      }
+      return rows.map((r) => ({
+        session_id: r.session_id,
+        session_title: titles.get(r.session_id) ?? "Untitled chat",
+        message_id: r.id,
+        role: r.role,
+        snippet: makeSnippet(r.content, query),
+        created_at: r.created_at,
+      }));
+    },
   };
 }
 
@@ -175,7 +246,48 @@ function createMemoryStore(): Store {
       messages.set(sessionId, list);
       return row;
     },
+    async importSession(title, messageList) {
+      const session = await this.createSession(title);
+      for (const m of messageList) {
+        await this.addMessage(session.id, m.role, m.content);
+      }
+      return session;
+    },
+    async searchMessages(query, limit) {
+      const needle = query.toLowerCase();
+      const hits: SearchHit[] = [];
+      for (const [sessionId, list] of messages) {
+        const session = sessions.get(sessionId);
+        for (const m of list) {
+          if (m.content.toLowerCase().includes(needle)) {
+            hits.push({
+              session_id: sessionId,
+              session_title: session?.title ?? "Untitled chat",
+              message_id: m.id,
+              role: m.role,
+              snippet: makeSnippet(m.content, query),
+              created_at: m.created_at,
+            });
+          }
+        }
+      }
+      return hits
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .slice(0, limit);
+    },
   };
+}
+
+/** Pull a context window around the first query match, with ellipses. */
+export function makeSnippet(content: string, query: string, radius = 60): string {
+  const flat = content.replace(/\s+/g, " ").trim();
+  const idx = flat.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return flat.slice(0, radius * 2 + 3);
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(flat.length, idx + query.length + radius);
+  const head = start > 0 ? "…" : "";
+  const tail = end < flat.length ? "…" : "";
+  return head + flat.slice(start, end) + tail;
 }
 
 let memoryStore: Store | null = null;
