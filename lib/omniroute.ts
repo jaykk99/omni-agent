@@ -215,3 +215,166 @@ export async function keylessChat(messages: ChatMessage[]): Promise<string> {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Simple chat page (/chat): a minimal dark-mode chatbot wired to this same
+// gateway (OpenRouter unless OMNIROUTE_BASE_URL points elsewhere). It adds
+// no new provider — it reuses the call shape above, plus one extra key
+// source: the owner can paste their own key in the page's settings, and it
+// reaches the server in an httpOnly cookie (the app's existing session
+// pattern, same as the PIN gate cookie) and is used for that browser's
+// requests only. A pasted key overrides the server env key; the env key is
+// never sent to the browser, and a pasted key is only ever shown back
+// masked. Keys are never logged anywhere in this module.
+
+export const OPENROUTER_KEY_COOKIE = "omni_openrouter_key";
+
+export type OpenRouterModelOption = { id: string; label: string };
+
+/** Curated default picker list. Every id was verified against the live
+ *  OpenRouter catalog (GET https://openrouter.ai/api/v1/models) — real,
+ *  currently-served open-weight models. Override with OPENROUTER_MODELS
+ *  (comma-separated ids) in the env. */
+export const DEFAULT_OPENROUTER_MODELS: OpenRouterModelOption[] = [
+  { id: "deepseek/deepseek-chat-v3.1", label: "DeepSeek Chat V3.1" },
+  { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B · Meta" },
+  { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B · OpenAI open-weight" },
+  { id: "openai/gpt-oss-20b", label: "GPT-OSS 20B · OpenAI open-weight, fast" },
+  { id: "mistralai/mistral-large", label: "Mistral Large · Mistral AI" },
+  {
+    id: "mistralai/mistral-small-3.2-24b-instruct",
+    label: "Mistral Small 3.2 24B · Mistral AI",
+  },
+  { id: "qwen/qwen3-235b-a22b-2507", label: "Qwen3 235B · Alibaba" },
+  { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 · reasoning" },
+  { id: "google/gemma-3-27b-it", label: "Gemma 3 27B · Google" },
+];
+
+/** Parse an OPENROUTER_MODELS value ("id1, id2 ,…") into picker options.
+ *  Env-supplied ids have no friendly name, so the label is the id itself. */
+export function parseOpenRouterModels(
+  raw?: string | null
+): OpenRouterModelOption[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: OpenRouterModelOption[] = [];
+  for (const part of raw.split(",")) {
+    const id = part.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, label: id });
+  }
+  return out;
+}
+
+/** The model picker list for the /chat page: OPENROUTER_MODELS when set,
+ *  otherwise the curated defaults. If OMNIROUTE_MODEL names one of the
+ *  curated ids it is moved first so it becomes the picker's default. */
+export function getOpenRouterModels(): OpenRouterModelOption[] {
+  const fromEnv = parseOpenRouterModels(process.env.OPENROUTER_MODELS);
+  if (fromEnv.length > 0) return fromEnv;
+  const models = [...DEFAULT_OPENROUTER_MODELS];
+  const idx = models.findIndex((m) => m.id === MODEL);
+  if (idx > 0) {
+    const [first] = models.splice(idx, 1);
+    models.unshift(first);
+  }
+  return models;
+}
+
+export function defaultOpenRouterModel(): string {
+  return getOpenRouterModels()[0].id;
+}
+
+/** Display-safe form of a key: a 3-char hint plus the last 4 chars, e.g.
+ *  "sk-••••cdef". Short keys are hidden entirely. This is the ONLY form in
+ *  which a key may be rendered back to the browser. */
+export function maskApiKey(key: string): string {
+  const k = key.trim();
+  if (k.length <= 8) return "••••";
+  return `${k.slice(0, 3)}••••${k.slice(-4)}`;
+}
+
+/** Masked form of the server-configured key (OMNIROUTE_API_KEY /
+ *  OPENROUTER_API_KEY), or null when none is set. */
+export function getServerKeyMasked(): string | null {
+  return API_KEY ? maskApiKey(API_KEY) : null;
+}
+
+export function hasServerKey(): boolean {
+  return !!API_KEY;
+}
+
+/** Pull the pasted-key cookie value out of a raw Cookie header. Reading the
+ *  header (instead of next/headers) keeps the route handlers trivially
+ *  testable and works identically in production. */
+export function apiKeyFromCookieHeader(
+  header: string | null
+): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== OPENROUTER_KEY_COOKIE) continue;
+    let value = part.slice(eq + 1).trim();
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      // Not URI-encoded — use the raw value.
+    }
+    return value || undefined;
+  }
+  return undefined;
+}
+
+/** Shape check for a pasted key: a single whitespace-free token of sane
+ *  length. Deliberately not a provider-format regex — gateways vary. */
+export function isPlausibleApiKey(key: unknown): key is string {
+  if (typeof key !== "string") return false;
+  const k = key.trim();
+  return k.length >= 8 && k.length <= 512 && !/\s/.test(k);
+}
+
+/** One plain chat completion for the /chat page — no tools, no session
+ *  store. `apiKey` is the per-request key (the owner's pasted key); when
+ *  omitted, the server env key is used. Throws with a plain message on any
+ *  failure so the route can surface it honestly. */
+export async function openRouterChat(
+  messages: ChatMessage[],
+  opts?: { model?: string; apiKey?: string }
+): Promise<string> {
+  const key = opts?.apiKey?.trim() || API_KEY;
+  if (!key) {
+    throw new Error(
+      "No OpenRouter key configured. Paste your key in this page's API key settings, or set OPENROUTER_API_KEY on the server."
+    );
+  }
+
+  const requested = opts?.model?.trim();
+  const model = resolveModel(requested || defaultOpenRouterModel());
+
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+      "HTTP-Referer": "https://omni-agent.vercel.app",
+      "X-Title": "Omni Agent",
+    },
+    body: JSON.stringify({ model, messages, temperature: 0.7 }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Gateway error ${res.status}: ${text.slice(0, 500)}`);
+  }
+
+  const json = (await res.json()) as {
+    choices?: { message?: { content?: string | null } }[];
+  };
+  const content = json.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("The model returned an empty reply — try again.");
+  }
+  return content;
+}
