@@ -31,6 +31,30 @@ Add keys only for the features you want:
 | `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Persistent chat history (`supabase/schema.sql`; RLS disabled, anon key is enough) |
 | `APP_PIN` | PIN gate in front of the whole app |
 
+## Simple chat (`/chat`)
+
+The sidebar's "💬 Simple chat" link opens a minimal dark-mode chatbot
+page — message list, input box, model picker — for when you just want to
+talk to a model without the agent shell. It reuses the same gateway as
+the main app (OpenRouter unless `OMNIROUTE_BASE_URL` points elsewhere);
+there is no separate provider and no keyless fallback on this page —
+without a key it says so and stops.
+
+- **Models**: the picker lists `OPENROUTER_MODELS` (comma-separated ids)
+  when set, otherwise a curated list of open-weight models in
+  `lib/omniroute.ts` (`DEFAULT_OPENROUTER_MODELS`), each verified against
+  the live OpenRouter catalog. The choice persists in the browser.
+- **Your own key**: the "🔑 API key" panel lets the owner paste an
+  OpenRouter key. It is stored only in an httpOnly cookie in that browser
+  (`/api/openrouter/key`), sent to the server with each chat request, and
+  used for that browser's requests only — it overrides the server env key
+  there. It is never stored server-side, never logged, and the UI only
+  ever shows it masked (first 3 + last 4 chars). "Remove" forgets it.
+- **Not saved**: conversations on this page live in the page only — a
+  reload clears them. Use the main app for saved, searchable history.
+- The PIN gate covers `/chat` like every other page when `APP_PIN` is
+  set.
+
 ## Stack
 
 - **UI**: Next.js 14, TypeScript, Tailwind
@@ -127,6 +151,8 @@ Supabase `ilike` when configured, plain filtering in memory otherwise.
 `app/api/**/*.test.ts`): PIN rate-limit windows/lockouts/re-lock, HMAC
 gate-token properties, the in-memory store (round-trips, import, search,
 snippets, message delete/truncate), the keyless chat path (system/tool
-message folding, POST retries, GET fallback, honest failure), and the
-messages/sessions route handlers (delete, truncate, rename, validation).
-53 tests, all green.
+message folding, POST retries, GET fallback, honest failure), the
+messages/sessions route handlers (delete, truncate, rename, validation),
+and the simple-chat OpenRouter path (model-list parsing, key masking and
+cookie handling, per-request key use, and the `/api/openrouter/*` route
+handlers). 75 tests, all green.

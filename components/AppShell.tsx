@@ -608,6 +608,13 @@ export default function AppShell() {
         >
           Lock
         </button>
+        <a
+          href="/chat"
+          className="rounded-md px-2 py-1 text-xs text-neutral-400 hover:bg-base-800 hover:text-white"
+          title="A minimal chatbot page over the OpenRouter gateway — no browser or terminal"
+        >
+          💬 Simple chat
+        </a>
         <button
           onClick={() => setSettingsOpen(true)}
           className="rounded-md px-2 py-1 text-xs text-neutral-400 hover:bg-base-800 hover:text-white"
